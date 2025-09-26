@@ -12,8 +12,17 @@ import {
   Chip,
   IconButton,
   Rating,
+  Button,
+  Alert,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  List,
+  ListItem,
+  ListItemText,
 } from '@mui/material';
-import { Edit, ZoomIn, ZoomOut, Add } from '@mui/icons-material';
+import { Edit, ZoomIn, ZoomOut, Add, Link, Delete } from '@mui/icons-material';
 import { format } from 'date-fns';
 import AttachmentViewer from './AttachmentViewer';
 
@@ -59,6 +68,18 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ y: 0, scrollTop: 0 });
   const timelineScrollRef = React.useRef<HTMLDivElement>(null);
+
+  // URL parsing state
+  const [quickAddUrl, setQuickAddUrl] = useState('');
+  const [urlParsing, setUrlParsing] = useState(false);
+  const [parseError, setParseError] = useState<string | null>(null);
+  const [parsedDataDialog, setParsedDataDialog] = useState(false);
+  const [parsedData, setParsedData] = useState<any>(null);
+
+  // Delete confirmation state
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [eventToDelete, setEventToDelete] = useState<Event | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     setIsClient(true);
@@ -149,6 +170,184 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
   const handleViewerClose = () => {
     setViewerOpen(false);
     setSelectedAttachment(null);
+  };
+
+  // URL validation helper
+  const isValidUrl = (url: string) => {
+    try {
+      new URL(url);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  // Handle URL parsing
+  const handleParseUrl = async () => {
+    if (!quickAddUrl.trim() || !isValidUrl(quickAddUrl) || !timelineId) return;
+
+    setUrlParsing(true);
+    setParseError(null);
+
+    try {
+      const response = await fetch('/api/parse-url', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          url: quickAddUrl.trim(),
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || `HTTP ${response.status}`);
+      }
+
+      const data = await response.json();
+      setParsedData(data.parsed);
+      setParsedDataDialog(true);
+      setQuickAddUrl('');
+    } catch (error) {
+      console.error('URL parsing error:', error);
+      setParseError(error instanceof Error ? error.message : 'Failed to parse URL');
+    } finally {
+      setUrlParsing(false);
+    }
+  };
+
+  // Create items from parsed data
+  const handleCreateFromParsedData = async () => {
+    if (!parsedData || !timelineId) return;
+
+    try {
+      const createdItems = [];
+
+      // Create events
+      if (parsedData.events?.length > 0) {
+        console.log(`Creating ${parsedData.events.length} events:`, parsedData.events);
+        for (let i = 0; i < parsedData.events.length; i++) {
+          const eventData = parsedData.events[i];
+          console.log(`Creating event ${i + 1}/${parsedData.events.length}:`, eventData);
+          try {
+            const response = await fetch('/api/events', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                ...eventData,
+                timelineId,
+              }),
+            });
+
+            if (response.ok) {
+              const event = await response.json();
+              console.log(`Event ${i + 1} created successfully:`, event.title);
+              createdItems.push(`Event: ${event.title}`);
+            } else {
+              const errorData = await response.json().catch(() => ({}));
+              console.error(`Failed to create event ${i + 1}:`, eventData, 'Error:', errorData);
+              // Continue with the next event instead of stopping
+            }
+          } catch (eventError) {
+            console.error(`Exception creating event ${i + 1}:`, eventData, 'Exception:', eventError);
+            // Continue with the next event instead of stopping
+          }
+        }
+        console.log(`Finished creating events. Successfully created: ${createdItems.filter(item => item.startsWith('Event:')).length}/${parsedData.events.length}`);
+      }
+
+      // Create entities
+      if (parsedData.entities?.length > 0) {
+        for (const entityData of parsedData.entities) {
+          const response = await fetch('/api/entities', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              ...entityData,
+              timelineId,
+            }),
+          });
+
+          if (response.ok) {
+            const entity = await response.json();
+            createdItems.push(`Entity: ${entity.name}`);
+          }
+        }
+      }
+
+      // Create place entities from locations
+      if (parsedData.locations?.length > 0) {
+        for (const locationData of parsedData.locations) {
+          const response = await fetch('/api/entities', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              name: locationData.name,
+              type: 'place',
+              description: locationData.description || locationData.address || '',
+              importance: 3,
+              timelineId,
+            }),
+          });
+
+          if (response.ok) {
+            const entity = await response.json();
+            createdItems.push(`Place: ${entity.name}`);
+          }
+        }
+      }
+
+      if (createdItems.length > 0) {
+        // Refresh timeline data
+        fetchTimelineData();
+        setParsedDataDialog(false);
+        setParsedData(null);
+      }
+    } catch (error) {
+      console.error('Error creating items from parsed data:', error);
+      setParseError('Failed to create items from parsed data');
+    }
+  };
+
+  // Delete event handlers
+  const handleDeleteEvent = (event: Event) => {
+    setEventToDelete(event);
+    setDeleteConfirmOpen(true);
+  };
+
+  const confirmDeleteEvent = async () => {
+    if (!eventToDelete) return;
+
+    setDeleting(true);
+    try {
+      const response = await fetch(`/api/events/${eventToDelete._id}`, {
+        method: 'DELETE',
+      });
+
+      if (response.ok) {
+        fetchTimelineData(); // Refresh the timeline
+        setDeleteConfirmOpen(false);
+        setEventToDelete(null);
+      } else {
+        console.error('Failed to delete event');
+      }
+    } catch (error) {
+      console.error('Error deleting event:', error);
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const cancelDeleteEvent = () => {
+    setDeleteConfirmOpen(false);
+    setEventToDelete(null);
   };
 
   // Drag scroll handlers
@@ -431,6 +630,48 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
             Zoom: {zoomLevel}%
           </Typography>
         </Box>
+
+        {/* Quick Add from URL */}
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 2 }}>
+          <TextField
+            size="small"
+            placeholder="Quick add from URL"
+            value={quickAddUrl}
+            onChange={(e) => {
+              setQuickAddUrl(e.target.value);
+              setParseError(null);
+            }}
+            disabled={urlParsing}
+            sx={{ flex: 1 }}
+            error={!!parseError}
+            helperText={parseError}
+            InputProps={{
+              startAdornment: <Link sx={{ mr: 1, color: 'text.secondary' }} fontSize="small" />,
+            }}
+          />
+          <Button
+            variant="contained"
+            size="small"
+            onClick={handleParseUrl}
+            disabled={!quickAddUrl.trim() || !isValidUrl(quickAddUrl) || urlParsing}
+            startIcon={urlParsing ? <CircularProgress size={16} /> : undefined}
+          >
+            {urlParsing ? 'Parsing...' : 'Go'}
+          </Button>
+        </Box>
+
+        {parseError && parseError.includes('Ollama') && (
+          <Alert severity="info" sx={{ mt: 1, fontSize: '0.875rem' }}>
+            <Typography variant="body2" sx={{ mb: 1 }}>
+              <strong>Ollama LLM not available.</strong> To enable URL parsing:
+            </Typography>
+            <Typography variant="body2" component="div" sx={{ fontFamily: 'monospace', fontSize: '0.8rem' }}>
+              1. Install: <code>curl -fsSL https://ollama.ai/install.sh | sh</code><br/>
+              2. Start: <code>ollama serve</code><br/>
+              3. Pull model: <code>ollama pull llama3.2</code>
+            </Typography>
+          </Alert>
+        )}
       </Box>
 
       {/* Vertical Timeline */}
@@ -554,7 +795,7 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
                       }}
                       onClick={(e) => handleEventClick(event._id, e.shiftKey)}
                     >
-                      <CardContent sx={{ py: isSelected ? 1 : 0.5, px: 2, transition: 'all 0.2s ease-in-out' }}>
+                      <CardContent sx={{ py: isSelected ? 1 : 0.25, px: 2, transition: 'all 0.2s ease-in-out' }}>
                         {isSelected ? (
                           <>
                             {/* Expanded view: title and controls row */}
@@ -578,6 +819,16 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
                                 >
                                   <Edit fontSize="small" />
                                 </IconButton>
+                                <IconButton
+                                  size="small"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleDeleteEvent(event);
+                                  }}
+                                  sx={{ opacity: 0.7, '&:hover': { opacity: 1, color: 'error.main' } }}
+                                >
+                                  <Delete fontSize="small" />
+                                </IconButton>
                               </Box>
                             </Box>
 
@@ -590,26 +841,25 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
                             </Typography>
                           </>
                         ) : (
-                          /* Collapsed view: try single line "Title - Date" */
-                          <Box sx={{ display: 'flex', alignItems: 'center', minHeight: '1.5rem' }}>
-                            <Typography
-                              variant="body2"
-                              sx={{
-                                fontSize: '0.9rem',
-                                fontWeight: 'medium',
-                                flex: 1,
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                                whiteSpace: 'nowrap',
-                                lineHeight: 1.2,
-                              }}
-                            >
-                              {event.title} - <span style={{ color: '#1976d2', fontWeight: 'normal' }}>
-                                {format(new Date(event.startDateTime), 'MMM d, yyyy h:mm a')}
-                                {event.endDateTime && ` - ${format(new Date(event.endDateTime), 'h:mm a')}`}
-                              </span>
-                            </Typography>
-                          </Box>
+                          /* Collapsed view: single line "Title - Date" */
+                          <Typography
+                            variant="body2"
+                            sx={{
+                              fontSize: '0.9rem',
+                              fontWeight: 'medium',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                              lineHeight: 1.2,
+                              margin: 0,
+                              padding: 0,
+                            }}
+                          >
+                            {event.title} - <span style={{ color: '#1976d2', fontWeight: 'normal' }}>
+                              {format(new Date(event.startDateTime), 'MMM d, yyyy h:mm a')}
+                              {event.endDateTime && ` - ${format(new Date(event.endDateTime), 'h:mm a')}`}
+                            </span>
+                          </Typography>
                         )}
 
                         {/* Only show when selected: description and attachments */}
@@ -700,6 +950,183 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
         onClose={handleViewerClose}
         attachment={selectedAttachment}
       />
+
+      {/* Parsed Data Dialog */}
+      <Dialog
+        open={parsedDataDialog}
+        onClose={() => {
+          setParsedDataDialog(false);
+          setParsedData(null);
+        }}
+        maxWidth="md"
+        fullWidth
+      >
+        <DialogTitle>
+          Parsed Data from URL
+          <Typography variant="body2" color="text.secondary">
+            Review and create timeline items from the parsed content
+          </Typography>
+        </DialogTitle>
+        <DialogContent>
+          {parsedData && (
+            <Box sx={{ mt: 1 }}>
+              {parsedData.events?.length > 0 && (
+                <Box sx={{ mb: 3 }}>
+                  <Typography variant="h6" gutterBottom>
+                    Events ({parsedData.events.length})
+                  </Typography>
+                  <List dense>
+                    {parsedData.events.map((event: any, index: number) => (
+                      <ListItem key={index}>
+                        <ListItemText
+                          primary={event.title}
+                          secondary={
+                            <Box component="div">
+                              {event.description && (
+                                <Box component="span" sx={{ display: 'block', mb: 0.5 }}>
+                                  {event.description}
+                                </Box>
+                              )}
+                              {event.startDateTime && (
+                                <Box component="span" sx={{ display: 'block', color: 'primary.main', fontSize: '0.75rem' }}>
+                                  {event.startDateTime}
+                                  {event.endDateTime && ` - ${event.endDateTime}`}
+                                </Box>
+                              )}
+                              {event.importance && (
+                                <Chip
+                                  label={`Importance: ${event.importance}/5`}
+                                  size="small"
+                                  sx={{ ml: 1, mt: 0.5 }}
+                                />
+                              )}
+                            </Box>
+                          }
+                        />
+                      </ListItem>
+                    ))}
+                  </List>
+                </Box>
+              )}
+
+              {parsedData.entities?.length > 0 && (
+                <Box sx={{ mb: 3 }}>
+                  <Typography variant="h6" gutterBottom>
+                    Entities ({parsedData.entities.length})
+                  </Typography>
+                  <List dense>
+                    {parsedData.entities.map((entity: any, index: number) => (
+                      <ListItem key={index}>
+                        <ListItemText
+                          primary={entity.name}
+                          secondary={
+                            <Box component="div">
+                              <Chip label={entity.type} size="small" sx={{ mr: 1, mb: 0.5 }} />
+                              {entity.description && (
+                                <Box component="span" sx={{ display: 'block' }}>
+                                  {entity.description}
+                                </Box>
+                              )}
+                            </Box>
+                          }
+                        />
+                      </ListItem>
+                    ))}
+                  </List>
+                </Box>
+              )}
+
+              {parsedData.locations?.length > 0 && (
+                <Box sx={{ mb: 3 }}>
+                  <Typography variant="h6" gutterBottom>
+                    Locations ({parsedData.locations.length})
+                  </Typography>
+                  <List dense>
+                    {parsedData.locations.map((location: any, index: number) => (
+                      <ListItem key={index}>
+                        <ListItemText
+                          primary={location.name}
+                          secondary={
+                            <Box component="div">
+                              {location.address && (
+                                <Box component="span" sx={{ display: 'block', mb: 0.5 }}>
+                                  {location.address}
+                                </Box>
+                              )}
+                              {location.description && (
+                                <Box component="span" sx={{ display: 'block' }}>
+                                  {location.description}
+                                </Box>
+                              )}
+                            </Box>
+                          }
+                        />
+                      </ListItem>
+                    ))}
+                  </List>
+                </Box>
+              )}
+
+              {(!parsedData.events?.length && !parsedData.entities?.length && !parsedData.locations?.length) && (
+                <Alert severity="info">
+                  No structured data could be extracted from this URL. The LLM was unable to identify clear timeline events, entities, or locations in the content.
+                </Alert>
+              )}
+            </Box>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={() => {
+              setParsedDataDialog(false);
+              setParsedData(null);
+            }}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="contained"
+            onClick={handleCreateFromParsedData}
+            disabled={!parsedData || (!parsedData.events?.length && !parsedData.entities?.length && !parsedData.locations?.length)}
+          >
+            Create Items
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog
+        open={deleteConfirmOpen}
+        onClose={cancelDeleteEvent}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>
+          Confirm Delete
+        </DialogTitle>
+        <DialogContent>
+          <Typography>
+            Confirm that you want to delete "{eventToDelete?.title}"
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={cancelDeleteEvent}
+            disabled={deleting}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="contained"
+            color="error"
+            onClick={confirmDeleteEvent}
+            disabled={deleting}
+            startIcon={deleting ? <CircularProgress size={16} /> : undefined}
+          >
+            {deleting ? 'Deleting...' : 'Delete'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }
