@@ -62,6 +62,8 @@ export default function TimelineInterface({ userId }: TimelineInterfaceProps) {
   const [addMenuAnchor, setAddMenuAnchor] = useState<null | HTMLElement>(null);
   const [locationModalCoords, setLocationModalCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [editingEventId, setEditingEventId] = useState<string | null>(null);
+  const [editingEntityId, setEditingEntityId] = useState<string | null>(null);
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
 
   // Initialize or load user's timeline
   useEffect(() => {
@@ -157,6 +159,15 @@ export default function TimelineInterface({ userId }: TimelineInterfaceProps) {
     handleAddMenuClose();
   };
 
+  const handleEditEntity = (entityId: string) => {
+    setEditingEntityId(entityId);
+    setEntityModalOpen(true);
+  };
+
+  const triggerRefresh = () => {
+    setRefreshTrigger(prev => prev + 1);
+  };
+
   const handleAddLocation = () => {
     setLocationModalCoords(null);
     setLocationModalOpen(true);
@@ -171,8 +182,7 @@ export default function TimelineInterface({ userId }: TimelineInterfaceProps) {
   const handleLocationCreated = () => {
     setLocationModalOpen(false);
     setLocationModalCoords(null);
-    // Refresh data in all panels
-    window.location.reload(); // Simple refresh - could be optimized
+    triggerRefresh();
   };
 
   // Update panel components with current state
@@ -187,6 +197,7 @@ export default function TimelineInterface({ userId }: TimelineInterfaceProps) {
             selectedItems={selectedItems}
             onSelection={handleSelection}
             onAddLocation={handleMapLocationAdd}
+            refreshTrigger={refreshTrigger}
           />
         );
         break;
@@ -198,6 +209,7 @@ export default function TimelineInterface({ userId }: TimelineInterfaceProps) {
             onSelection={handleSelection}
             onEditEvent={handleEditEvent}
             onAddEvent={handleAddEvent}
+            refreshTrigger={refreshTrigger}
           />
         );
         break;
@@ -207,6 +219,9 @@ export default function TimelineInterface({ userId }: TimelineInterfaceProps) {
             timelineId={currentTimelineId}
             selectedItems={selectedItems}
             onSelection={handleSelection}
+            onEditEntity={handleEditEntity}
+            onAddEntity={handleAddEntity}
+            refreshTrigger={refreshTrigger}
           />
         );
         break;
@@ -261,19 +276,24 @@ export default function TimelineInterface({ userId }: TimelineInterfaceProps) {
         timelineId={currentTimelineId}
         eventId={editingEventId}
         onEventCreated={() => {
-          // Refresh timeline data
           setEventModalOpen(false);
           setEditingEventId(null);
+          triggerRefresh();
         }}
       />
 
       <EntityModal
         open={entityModalOpen}
-        onClose={() => setEntityModalOpen(false)}
-        timelineId={currentTimelineId}
-        onEntityCreated={() => {
-          // Refresh entities data
+        onClose={() => {
           setEntityModalOpen(false);
+          setEditingEntityId(null);
+        }}
+        timelineId={currentTimelineId}
+        entityId={editingEntityId}
+        onEntityCreated={() => {
+          setEntityModalOpen(false);
+          setEditingEntityId(null);
+          triggerRefresh();
         }}
       />
 

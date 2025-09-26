@@ -19,7 +19,7 @@ import AttachmentViewer from './AttachmentViewer';
 interface Entity {
   _id: string;
   name: string;
-  type: 'person' | 'organization' | 'object' | 'concept' | 'other';
+  type: 'person' | 'organization' | 'place' | 'object' | 'concept' | 'other';
   description?: string;
   importance: number;
 }
@@ -46,6 +46,7 @@ interface EntitiesPanelProps {
   onSelection?: (type: 'event' | 'entity' | 'location', ids: string[], append?: boolean) => void;
   onEditEntity?: (entityId: string) => void;
   onAddEntity?: () => void;
+  refreshTrigger?: number;
 }
 
 const getEntityTypeColor = (type: string) => {
@@ -54,7 +55,7 @@ const getEntityTypeColor = (type: string) => {
       return 'primary';
     case 'organization':
       return 'secondary';
-    case 'location':
+    case 'place':
       return 'success';
     case 'object':
       return 'warning';
@@ -65,7 +66,7 @@ const getEntityTypeColor = (type: string) => {
   }
 };
 
-export default function EntitiesPanel({ timelineId, selectedItems, onSelection, onEditEntity, onAddEntity }: EntitiesPanelProps) {
+export default function EntitiesPanel({ timelineId, selectedItems, onSelection, onEditEntity, onAddEntity, refreshTrigger }: EntitiesPanelProps) {
   const [loading, setLoading] = useState(false);
   const [entities, setEntities] = useState<Entity[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
@@ -77,7 +78,7 @@ export default function EntitiesPanel({ timelineId, selectedItems, onSelection, 
     if (timelineId) {
       fetchEntities();
     }
-  }, [timelineId]);
+  }, [timelineId, refreshTrigger]);
 
   const fetchEntities = async () => {
     setLoading(true);

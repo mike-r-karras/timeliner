@@ -36,7 +36,7 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const { name, type, description, importance } = await request.json();
+    const { name, type, description, importance, locationId } = await request.json();
 
     await dbConnect();
 
@@ -45,6 +45,7 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
     if (type !== undefined) updateData.type = type;
     if (description !== undefined) updateData.description = description?.trim();
     if (importance !== undefined) updateData.importance = importance;
+    if (locationId !== undefined) updateData.locationId = locationId || null;
 
     const entity = await Entity.findOneAndUpdate(
       { _id: params.id, createdBy: session.user.id },

@@ -43,9 +43,10 @@ interface TimelinePanelProps {
   onSelection?: (type: 'event' | 'entity' | 'location', ids: string[], append?: boolean) => void;
   onEditEvent?: (eventId: string) => void;
   onAddEvent?: () => void;
+  refreshTrigger?: number;
 }
 
-export default function TimelinePanel({ timelineId, selectedItems, onSelection, onEditEvent, onAddEvent }: TimelinePanelProps) {
+export default function TimelinePanel({ timelineId, selectedItems, onSelection, onEditEvent, onAddEvent, refreshTrigger }: TimelinePanelProps) {
   const [loading, setLoading] = useState(false);
   const [events, setEvents] = useState<Event[]>([]);
   const [eventAttachments, setEventAttachments] = useState<Record<string, Attachment[]>>({});
@@ -55,6 +56,9 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
   const [viewerOpen, setViewerOpen] = useState(false);
   const [selectedAttachment, setSelectedAttachment] = useState<Attachment | null>(null);
   const [isClient, setIsClient] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragStart, setDragStart] = useState({ y: 0, scrollTop: 0 });
+  const timelineScrollRef = React.useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setIsClient(true);
@@ -64,7 +68,7 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
     if (timelineId && isClient) {
       fetchTimelineData();
     }
-  }, [timelineId, isClient]);
+  }, [timelineId, isClient, refreshTrigger]);
 
   const fetchTimelineData = async () => {
     setLoading(true);
@@ -125,6 +129,9 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
   };
 
   const handleEventClick = (eventId: string, shiftKey: boolean) => {
+    // Don't trigger selection during drag
+    if (isDragging) return;
+
     if (onSelection) {
       onSelection('event', [eventId], shiftKey);
     }
@@ -142,6 +149,35 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
   const handleViewerClose = () => {
     setViewerOpen(false);
     setSelectedAttachment(null);
+  };
+
+  // Drag scroll handlers
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (!timelineScrollRef.current) return;
+
+    setIsDragging(true);
+    setDragStart({
+      y: e.clientY,
+      scrollTop: timelineScrollRef.current.scrollTop
+    });
+
+    // Prevent text selection
+    e.preventDefault();
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (!isDragging || !timelineScrollRef.current) return;
+
+    const deltaY = e.clientY - dragStart.y;
+    timelineScrollRef.current.scrollTop = dragStart.scrollTop - deltaY;
+  };
+
+  const handleMouseUp = () => {
+    setIsDragging(false);
+  };
+
+  const handleMouseLeave = () => {
+    setIsDragging(false);
   };
 
   // Timeline calculation utilities
@@ -297,8 +333,35 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
       }
     }
 
-    // Sort by position and limit to reasonable number of marks
-    return marks.sort((a, b) => a.position - b.position).slice(0, 25);
+    // Sort by position and ensure we have marks covering the full timeline
+    const sortedMarks = marks.sort((a, b) => a.position - b.position);
+
+    // Add boundary marks at 0% and 100% if needed
+    if (sortedMarks.length > 0) {
+      const firstMark = sortedMarks[0];
+      const lastMark = sortedMarks[sortedMarks.length - 1];
+
+      // Add start mark if none exists at the beginning
+      if (firstMark.position > 2) {
+        sortedMarks.unshift({
+          position: 0,
+          label: formatMain(start),
+          isMainMark: false
+        });
+      }
+
+      // Add end mark if none exists at the end
+      if (lastMark.position < 98) {
+        sortedMarks.push({
+          position: 100,
+          label: formatMain(end),
+          isMainMark: false
+        });
+      }
+    }
+
+    // Return all marks (remove the artificial limit)
+    return sortedMarks;
   };
 
 
@@ -371,7 +434,20 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
       </Box>
 
       {/* Vertical Timeline */}
-      <Box sx={{ flex: 1, overflow: 'auto', position: 'relative' }}>
+      <Box
+        ref={timelineScrollRef}
+        sx={{
+          flex: 1,
+          overflow: 'auto',
+          position: 'relative',
+          cursor: isDragging ? 'grabbing' : 'grab',
+          userSelect: isDragging ? 'none' : 'auto'
+        }}
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+        onMouseLeave={handleMouseLeave}
+      >
         {!isClient ? (
           <Box sx={{ textAlign: 'center', py: 4 }}>
             <Typography color="text.secondary">
@@ -479,39 +555,62 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
                       onClick={(e) => handleEventClick(event._id, e.shiftKey)}
                     >
                       <CardContent sx={{ py: isSelected ? 1 : 0.5, px: 2, transition: 'all 0.2s ease-in-out' }}>
-                        {/* Always show title and controls row */}
-                        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: isSelected ? 1 : 0.5 }}>
-                          <Typography variant="h6" sx={{ flex: 1, fontSize: '0.95rem', fontWeight: 'bold' }}>
-                            {event.title}
-                          </Typography>
-                          {isSelected && (
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                              <Rating
-                                value={event.importance}
-                                readOnly
-                                size="small"
-                              />
-                              <IconButton
-                                size="small"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  onEditEvent?.(event._id);
-                                }}
-                                sx={{ opacity: 0.7, '&:hover': { opacity: 1 } }}
-                              >
-                                <Edit fontSize="small" />
-                              </IconButton>
+                        {isSelected ? (
+                          <>
+                            {/* Expanded view: title and controls row */}
+                            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 1 }}>
+                              <Typography variant="h6" sx={{ flex: 1, fontSize: '0.95rem', fontWeight: 'bold' }}>
+                                {event.title}
+                              </Typography>
+                              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                <Rating
+                                  value={event.importance}
+                                  readOnly
+                                  size="small"
+                                />
+                                <IconButton
+                                  size="small"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onEditEvent?.(event._id);
+                                  }}
+                                  sx={{ opacity: 0.7, '&:hover': { opacity: 1 } }}
+                                >
+                                  <Edit fontSize="small" />
+                                </IconButton>
+                              </Box>
                             </Box>
-                          )}
-                        </Box>
 
-                        {/* Always show date/time */}
-                        <Typography variant="body2" color="primary" sx={{ mb: isSelected ? 1 : 0, fontSize: '0.8rem' }}>
-                          {format(new Date(event.startDateTime), 'PPpp')}
-                          {event.endDateTime && (
-                            <span> - {format(new Date(event.endDateTime), 'PPpp')}</span>
-                          )}
-                        </Typography>
+                            {/* Expanded view: date/time */}
+                            <Typography variant="body2" color="primary" sx={{ mb: 1, fontSize: '0.8rem' }}>
+                              {format(new Date(event.startDateTime), 'PPpp')}
+                              {event.endDateTime && (
+                                <span> - {format(new Date(event.endDateTime), 'PPpp')}</span>
+                              )}
+                            </Typography>
+                          </>
+                        ) : (
+                          /* Collapsed view: try single line "Title - Date" */
+                          <Box sx={{ display: 'flex', alignItems: 'center', minHeight: '1.5rem' }}>
+                            <Typography
+                              variant="body2"
+                              sx={{
+                                fontSize: '0.9rem',
+                                fontWeight: 'medium',
+                                flex: 1,
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap',
+                                lineHeight: 1.2,
+                              }}
+                            >
+                              {event.title} - <span style={{ color: '#1976d2', fontWeight: 'normal' }}>
+                                {format(new Date(event.startDateTime), 'MMM d, yyyy h:mm a')}
+                                {event.endDateTime && ` - ${format(new Date(event.endDateTime), 'h:mm a')}`}
+                              </span>
+                            </Typography>
+                          </Box>
+                        )}
 
                         {/* Only show when selected: description and attachments */}
                         {isSelected && (

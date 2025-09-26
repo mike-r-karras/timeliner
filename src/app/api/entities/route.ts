@@ -53,6 +53,7 @@ export async function POST(request: NextRequest) {
       type,
       description,
       importance,
+      locationId,
       timelineId,
     } = await request.json();
 
@@ -80,6 +81,7 @@ export async function POST(request: NextRequest) {
       type,
       description: description?.trim(),
       importance: importance || 3,
+      ...(locationId && { locationId }),
       timelineId,
       createdBy: session.user.id,
     });

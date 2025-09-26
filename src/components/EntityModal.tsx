@@ -21,8 +21,16 @@ import {
   Divider,
   Rating,
 } from '@mui/material';
-import { AttachFile, Delete, Visibility } from '@mui/icons-material';
+import { AttachFile, Delete, Visibility, Add } from '@mui/icons-material';
 import AttachmentViewer from './AttachmentViewer';
+import LocationModal from './LocationModal';
+
+interface Location {
+  _id: string;
+  name: string;
+  latitude: number;
+  longitude: number;
+}
 
 interface Attachment {
   _id: string;
@@ -45,6 +53,7 @@ interface EntityModalProps {
 const entityTypes = [
   { value: 'person', label: 'Person' },
   { value: 'organization', label: 'Organization' },
+  { value: 'place', label: 'Place' },
   { value: 'object', label: 'Object' },
   { value: 'concept', label: 'Concept' },
   { value: 'other', label: 'Other' },
@@ -62,6 +71,7 @@ export default function EntityModal({
     type: 'person',
     description: '',
     importance: 3,
+    locationId: '',
   });
 
   const [loading, setLoading] = useState(false);
@@ -70,9 +80,12 @@ export default function EntityModal({
   const [uploading, setUploading] = useState(false);
   const [viewerOpen, setViewerOpen] = useState(false);
   const [selectedAttachment, setSelectedAttachment] = useState<Attachment | null>(null);
+  const [locations, setLocations] = useState<Location[]>([]);
+  const [locationModalOpen, setLocationModalOpen] = useState(false);
 
   useEffect(() => {
     if (open) {
+      fetchLocations();
       if (entityId) {
         fetchEntity();
       } else {
@@ -87,9 +100,22 @@ export default function EntityModal({
       type: 'person',
       description: '',
       importance: 3,
+      locationId: '',
     });
     setError('');
     setAttachments([]);
+  };
+
+  const fetchLocations = async () => {
+    try {
+      const response = await fetch('/api/locations');
+      if (response.ok) {
+        const data = await response.json();
+        setLocations(data);
+      }
+    } catch (error) {
+      console.error('Error fetching locations:', error);
+    }
   };
 
   const fetchEntity = async () => {
@@ -108,6 +134,7 @@ export default function EntityModal({
           type: entity.type,
           description: entity.description || '',
           importance: entity.importance || 3,
+          locationId: entity.locationId || '',
         });
       }
 
@@ -222,6 +249,16 @@ export default function EntityModal({
     setSelectedAttachment(null);
   };
 
+  const handleAddLocation = () => {
+    setLocationModalOpen(true);
+  };
+
+  const handleLocationCreated = (location: Location) => {
+    setLocations(prev => [...prev, location]);
+    setFormData(prev => ({ ...prev, locationId: location._id }));
+    setLocationModalOpen(false);
+  };
+
   const formatFileSize = (bytes: number) => {
     if (bytes === 0) return '0 Bytes';
     const k = 1024;
@@ -290,6 +327,41 @@ export default function EntityModal({
                 size="large"
               />
             </Box>
+
+            {/* Location Selection - Only show for 'place' entity type */}
+            {formData.type === 'place' && (
+              <Box sx={{ display: 'flex', gap: 1, alignItems: 'flex-end' }}>
+                <FormControl fullWidth>
+                  <InputLabel>Location (Optional)</InputLabel>
+                  <Select
+                    value={formData.locationId}
+                    onChange={(e) => setFormData({ ...formData, locationId: e.target.value })}
+                    label="Location (Optional)"
+                  >
+                    <MenuItem value="">
+                      <em>No location</em>
+                    </MenuItem>
+                    {locations.map((location) => (
+                      <MenuItem key={location._id} value={location._id}>
+                        {location.name}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+                <IconButton
+                  onClick={handleAddLocation}
+                  sx={{
+                    height: 56, // Match Select component height
+                    width: 56,
+                    bgcolor: 'primary.main',
+                    color: 'white',
+                    '&:hover': { bgcolor: 'primary.dark' }
+                  }}
+                >
+                  <Add />
+                </IconButton>
+              </Box>
+            )}
 
             <Divider sx={{ my: 2 }} />
 
@@ -395,6 +467,14 @@ export default function EntityModal({
         open={viewerOpen}
         onClose={handleViewerClose}
         attachment={selectedAttachment}
+      />
+
+      {/* Location Creation Modal */}
+      <LocationModal
+        open={locationModalOpen}
+        onClose={() => setLocationModalOpen(false)}
+        timelineId={timelineId}
+        onLocationCreated={handleLocationCreated}
       />
     </Dialog>
   );

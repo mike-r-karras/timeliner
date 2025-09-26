@@ -3,9 +3,10 @@ import mongoose, { Document, Schema } from 'mongoose';
 export interface IEntity extends Document {
   _id: string;
   name: string;
-  type: 'person' | 'organization' | 'object' | 'concept' | 'other';
+  type: 'person' | 'organization' | 'place' | 'object' | 'concept' | 'other';
   description?: string;
   importance: number;
+  locationId?: string;
   timelineId: string;
   createdBy: string;
   createdAt: Date;
@@ -22,7 +23,7 @@ const EntitySchema = new Schema<IEntity>(
     },
     type: {
       type: String,
-      enum: ['person', 'organization', 'object', 'concept', 'other'],
+      enum: ['person', 'organization', 'place', 'object', 'concept', 'other'],
       required: true,
     },
     description: {
@@ -34,6 +35,11 @@ const EntitySchema = new Schema<IEntity>(
       min: 1,
       max: 5,
       default: 3,
+    },
+    locationId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Location',
+      required: false,
     },
     timelineId: {
       type: Schema.Types.ObjectId,

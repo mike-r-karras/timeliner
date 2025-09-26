@@ -57,9 +57,10 @@ interface MapPanelProps {
   selectedItems?: SelectedItems;
   onSelection?: (type: 'event' | 'entity' | 'location', ids: string[], append?: boolean) => void;
   onAddLocation?: (lat: number, lng: number) => void;
+  refreshTrigger?: number;
 }
 
-export default function MapPanel({ timelineId, selectedItems, onSelection, onAddLocation }: MapPanelProps) {
+export default function MapPanel({ timelineId, selectedItems, onSelection, onAddLocation, refreshTrigger }: MapPanelProps) {
   const [loading, setLoading] = useState(false);
   const [events, setEvents] = useState<Event[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
@@ -77,7 +78,7 @@ export default function MapPanel({ timelineId, selectedItems, onSelection, onAdd
     if (timelineId) {
       fetchMapData();
     }
-  }, [timelineId]);
+  }, [timelineId, refreshTrigger]);
 
   useEffect(() => {
     // Update map view when events or selections change
