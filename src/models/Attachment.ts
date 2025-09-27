@@ -8,8 +8,8 @@ export interface IAttachment extends Document {
   size: number;
   url: string;
   type: 'article' | 'photo' | 'video' | 'audio' | 'link' | 'document' | 'other';
-  eventId?: string;
-  entityId?: string;
+  contentHash: string;
+  data: Buffer;
   createdBy: string;
   createdAt: Date;
   updatedAt: Date;
@@ -47,15 +47,15 @@ const AttachmentSchema = new Schema<IAttachment>(
       enum: ['article', 'photo', 'video', 'audio', 'link', 'document', 'other'],
       required: true,
     },
-    eventId: {
-      type: Schema.Types.ObjectId,
-      ref: 'Event',
-      required: false,
+    contentHash: {
+      type: String,
+      required: true,
+      unique: true,
+      index: true,
     },
-    entityId: {
-      type: Schema.Types.ObjectId,
-      ref: 'Entity',
-      required: false,
+    data: {
+      type: Buffer,
+      required: true,
     },
     createdBy: {
       type: Schema.Types.ObjectId,
@@ -68,7 +68,7 @@ const AttachmentSchema = new Schema<IAttachment>(
   }
 );
 
-AttachmentSchema.index({ eventId: 1 });
-AttachmentSchema.index({ entityId: 1 });
+// Index for efficient content hash lookups
+AttachmentSchema.index({ contentHash: 1 });
 
 export default mongoose.models.Attachment || mongoose.model<IAttachment>('Attachment', AttachmentSchema);

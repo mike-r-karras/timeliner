@@ -12,8 +12,13 @@ import {
   InputAdornment,
   IconButton,
   Rating,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  Button,
 } from '@mui/material';
-import { Search, Edit, Add } from '@mui/icons-material';
+import { Search, Edit, Add, Delete, Bolt } from '@mui/icons-material';
 import AttachmentViewer from './AttachmentViewer';
 
 interface Entity {
@@ -47,6 +52,10 @@ interface EntitiesPanelProps {
   onEditEntity?: (entityId: string) => void;
   onAddEntity?: () => void;
   refreshTrigger?: number;
+  onEntitiesFiltered?: (entityIds: string[]) => void;
+  onStartConnection?: (sourceType: 'entity', sourceId: string, sourceName: string) => void;
+  isConnecting?: boolean;
+  onConnectionTarget?: (targetType: 'entity', targetId: string, targetName: string) => void;
 }
 
 const getEntityTypeColor = (type: string) => {
@@ -66,13 +75,22 @@ const getEntityTypeColor = (type: string) => {
   }
 };
 
-export default function EntitiesPanel({ timelineId, selectedItems, onSelection, onEditEntity, onAddEntity, refreshTrigger }: EntitiesPanelProps) {
+export default function EntitiesPanel({ timelineId, selectedItems, onSelection, onEditEntity, onAddEntity, refreshTrigger, onEntitiesFiltered, onStartConnection, isConnecting, onConnectionTarget }: EntitiesPanelProps) {
   const [loading, setLoading] = useState(false);
   const [entities, setEntities] = useState<Entity[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [entityAttachments, setEntityAttachments] = useState<Record<string, Attachment[]>>({});
   const [viewerOpen, setViewerOpen] = useState(false);
   const [selectedAttachment, setSelectedAttachment] = useState<Attachment | null>(null);
+
+  // Delete confirmation state
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [entityToDelete, setEntityToDelete] = useState<Entity | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  // Local connection state
+  const [localIsConnecting, setLocalIsConnecting] = useState(false);
+  const [connectingSourceId, setConnectingSourceId] = useState<string | null>(null);
 
   useEffect(() => {
     if (timelineId) {
@@ -110,9 +128,29 @@ export default function EntitiesPanel({ timelineId, selectedItems, onSelection, 
     }
   };
 
-  const handleEntityClick = (entityId: string, shiftKey: boolean) => {
+  const handleEntityClick = (entityId: string, shiftKey: boolean, entityName: string) => {
+    // If in connection mode, handle as target
+    if (localIsConnecting && connectingSourceId && onConnectionTarget) {
+      if (entityId !== connectingSourceId) {
+        onConnectionTarget('entity', entityId, entityName);
+        // Reset connection state
+        setLocalIsConnecting(false);
+        setConnectingSourceId(null);
+      }
+      return;
+    }
+
+    // Normal selection behavior
     if (onSelection) {
       onSelection('entity', [entityId], shiftKey);
+    }
+  };
+
+  const handleStartConnection = (sourceId: string, sourceName: string) => {
+    setLocalIsConnecting(true);
+    setConnectingSourceId(sourceId);
+    if (onStartConnection) {
+      onStartConnection('entity', sourceId, sourceName);
     }
   };
 
@@ -130,10 +168,52 @@ export default function EntitiesPanel({ timelineId, selectedItems, onSelection, 
     setSelectedAttachment(null);
   };
 
+  // Delete entity handlers
+  const handleDeleteEntity = (entity: Entity) => {
+    setEntityToDelete(entity);
+    setDeleteConfirmOpen(true);
+  };
+
+  const confirmDeleteEntity = async () => {
+    if (!entityToDelete) return;
+
+    setDeleting(true);
+    try {
+      const response = await fetch(`/api/entities/${entityToDelete._id}`, {
+        method: 'DELETE',
+      });
+
+      if (response.ok) {
+        fetchEntities(); // Refresh the entities
+        setDeleteConfirmOpen(false);
+        setEntityToDelete(null);
+      } else {
+        console.error('Failed to delete entity');
+      }
+    } catch (error) {
+      console.error('Error deleting entity:', error);
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const cancelDeleteEntity = () => {
+    setDeleteConfirmOpen(false);
+    setEntityToDelete(null);
+  };
+
   const filteredEntities = entities.filter(entity =>
     entity.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
     entity.description?.toLowerCase().includes(searchTerm.toLowerCase())
   );
+
+  // Notify parent component when entities are filtered
+  useEffect(() => {
+    if (onEntitiesFiltered) {
+      const filteredIds = filteredEntities.map(entity => entity._id);
+      onEntitiesFiltered(filteredIds);
+    }
+  }, [entities, searchTerm, onEntitiesFiltered]);
 
   if (loading) {
     return (
@@ -178,8 +258,17 @@ export default function EntitiesPanel({ timelineId, selectedItems, onSelection, 
         />
       </Box>
 
+      {/* Connection mode indicator */}
+      {localIsConnecting && (
+        <Box sx={{ p: 1, backgroundColor: 'warning.light', textAlign: 'center' }}>
+          <Typography variant="caption" sx={{ color: 'warning.contrastText' }}>
+            🔗 Click an entity to connect to it
+          </Typography>
+        </Box>
+      )}
+
       {/* Entities List */}
-      <Box sx={{ flex: 1, overflow: 'auto', p: 1 }}>
+      <Box sx={{ flex: 1, overflow: 'auto', p: 1, pl: 3 }}>
         {filteredEntities.length === 0 ? (
           <Box sx={{ textAlign: 'center', py: 4 }}>
             <Typography color="text.secondary">
@@ -194,17 +283,39 @@ export default function EntitiesPanel({ timelineId, selectedItems, onSelection, 
             {filteredEntities.map((entity) => (
               <Card
                 key={entity._id}
+                data-entity-id={entity._id}
                 sx={{
                   cursor: 'pointer',
                   border: isEntitySelected(entity._id) ? '2px solid' : '1px solid',
                   borderColor: isEntitySelected(entity._id) ? 'primary.main' : 'divider',
-                  '&:hover': { elevation: 2 }
+                  '&:hover': { elevation: 2 },
+                  ...(localIsConnecting && entity._id === connectingSourceId && {
+                    backgroundColor: 'success.light',
+                    borderColor: 'success.main',
+                    border: '3px solid',
+                  }),
+                  ...(localIsConnecting && entity._id !== connectingSourceId && {
+                    backgroundColor: 'warning.light',
+                    borderColor: 'warning.main',
+                    border: '3px solid',
+                    animation: 'pulse 1s infinite',
+                    '&:hover': {
+                      backgroundColor: 'warning.main',
+                      borderColor: 'warning.dark',
+                      '& .MuiTypography-root': {
+                        color: 'white'
+                      }
+                    }
+                  })
                 }}
-                onClick={(e) => handleEntityClick(entity._id, e.shiftKey)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleEntityClick(entity._id, e.shiftKey, entity.name);
+                }}
               >
                 <CardContent sx={{ py: 1 }}>
                   <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 1 }}>
-                    <Typography variant="h6" sx={{ flex: 1, fontSize: '0.95rem' }}>
+                    <Typography variant="h6" sx={{ flex: 1, fontSize: '0.95rem' }} className="entity-name">
                       {entity.name}
                     </Typography>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -230,6 +341,27 @@ export default function EntitiesPanel({ timelineId, selectedItems, onSelection, 
                           <Edit fontSize="small" />
                         </IconButton>
                       )}
+                      <IconButton
+                        size="small"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleStartConnection(entity._id, entity.name);
+                        }}
+                        sx={{ opacity: 0.7, '&:hover': { opacity: 1, color: 'warning.main' } }}
+                        title="Create connection"
+                      >
+                        <Bolt fontSize="small" />
+                      </IconButton>
+                      <IconButton
+                        size="small"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDeleteEntity(entity);
+                        }}
+                        sx={{ opacity: 0.7, '&:hover': { opacity: 1, color: 'error.main' } }}
+                      >
+                        <Delete fontSize="small" />
+                      </IconButton>
                     </Box>
                   </Box>
 
@@ -324,6 +456,40 @@ export default function EntitiesPanel({ timelineId, selectedItems, onSelection, 
         onClose={handleViewerClose}
         attachment={selectedAttachment}
       />
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog
+        open={deleteConfirmOpen}
+        onClose={cancelDeleteEntity}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>
+          Confirm Delete
+        </DialogTitle>
+        <DialogContent>
+          <Typography>
+            Confirm that you want to delete "{entityToDelete?.name}"
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={cancelDeleteEntity}
+            disabled={deleting}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="contained"
+            color="error"
+            onClick={confirmDeleteEntity}
+            disabled={deleting}
+            startIcon={deleting ? <CircularProgress size={16} /> : undefined}
+          >
+            {deleting ? 'Deleting...' : 'Delete'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }

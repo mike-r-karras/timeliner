@@ -1,9 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
-import { writeFile } from 'fs/promises';
-import { join } from 'path';
+import { createHash } from 'crypto';
 import { v4 as uuidv4 } from 'uuid';
+import dbConnect from '@/lib/mongodb';
+import Attachment from '@/models/Attachment';
+import AttachmentLink from '@/models/AttachmentLink';
+import Event from '@/models/Event';
+import Entity from '@/models/Entity';
 
 export async function POST(request: NextRequest) {
   try {
@@ -32,79 +36,90 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'File size too large. Maximum 50MB allowed.' }, { status: 400 });
     }
 
-    // Generate unique filename
-    const fileExtension = file.name.split('.').pop() || '';
-    const uniqueFilename = `${uuidv4()}.${fileExtension}`;
-
-    // Create upload directory path
-    const uploadDir = join(process.cwd(), 'public', 'uploads', 'attachments');
-
-    // Ensure directory exists
-    try {
-      const { mkdir } = await import('fs/promises');
-      await mkdir(uploadDir, { recursive: true });
-    } catch (error) {
-      // Directory might already exist, continue
-    }
-
-    const filepath = join(uploadDir, uniqueFilename);
-
-    // Convert file to buffer and save
+    // Convert file to buffer
     const bytes = await file.arrayBuffer();
     const buffer = Buffer.from(bytes);
-    await writeFile(filepath, buffer);
 
-    // Determine attachment type from MIME type if not provided
-    let finalType = attachmentType;
-    if (!attachmentType || attachmentType === 'other') {
-      if (file.type.startsWith('image/')) finalType = 'photo';
-      else if (file.type.startsWith('video/')) finalType = 'video';
-      else if (file.type.startsWith('audio/')) finalType = 'audio';
-      else if (file.type === 'application/pdf') finalType = 'document';
-      else if (file.type.includes('text/')) finalType = 'document';
-      else finalType = 'other';
+    // Calculate content hash using SHA-256
+    const contentHash = createHash('sha256').update(buffer).digest('hex');
+
+    await dbConnect();
+
+    // Verify ownership based on the type
+    if (eventId) {
+      const event = await Event.findOne({
+        _id: eventId,
+        createdBy: session.user.id,
+      });
+
+      if (!event) {
+        return NextResponse.json({ error: 'Event not found' }, { status: 404 });
+      }
     }
 
-    // Create attachment record in database
-    const attachmentData = {
-      filename: uniqueFilename,
-      originalName: file.name,
-      mimeType: file.type,
-      size: file.size,
-      url: `/uploads/attachments/${uniqueFilename}`,
-      type: finalType,
+    if (entityId) {
+      const entity = await Entity.findOne({
+        _id: entityId,
+        createdBy: session.user.id,
+      });
+
+      if (!entity) {
+        return NextResponse.json({ error: 'Entity not found' }, { status: 404 });
+      }
+    }
+
+    // Check if attachment with this content hash already exists
+    let attachment = await Attachment.findOne({ contentHash });
+
+    if (!attachment) {
+      // Generate unique filename
+      const fileExtension = file.name.split('.').pop() || '';
+      const uniqueFilename = `${uuidv4()}.${fileExtension}`;
+
+      // Determine attachment type from MIME type if not provided
+      let finalType = attachmentType;
+      if (!attachmentType || attachmentType === 'other') {
+        if (file.type.startsWith('image/')) finalType = 'photo';
+        else if (file.type.startsWith('video/')) finalType = 'video';
+        else if (file.type.startsWith('audio/')) finalType = 'audio';
+        else if (file.type === 'application/pdf') finalType = 'document';
+        else if (file.type.includes('text/')) finalType = 'document';
+        else finalType = 'other';
+      }
+
+      // Create new attachment record with binary data in MongoDB
+      attachment = await Attachment.create({
+        filename: uniqueFilename,
+        originalName: file.name,
+        mimeType: file.type,
+        size: file.size,
+        url: `/api/attachments/serve/${contentHash}`, // API endpoint to serve the file
+        type: finalType,
+        contentHash,
+        data: buffer,
+        createdBy: session.user.id,
+      });
+    }
+
+    // Create link between attachment and entity/event
+    const attachmentLink = await AttachmentLink.create({
+      attachmentId: attachment._id,
       ...(eventId && { eventId }),
       ...(entityId && { entityId }),
       createdBy: session.user.id,
-    };
-
-    // Save to database (we'll implement this API endpoint)
-    const createResponse = await fetch(`${process.env.NEXTAUTH_URL}/api/attachments`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Cookie': request.headers.get('cookie') || ''
-      },
-      body: JSON.stringify(attachmentData),
     });
-
-    if (!createResponse.ok) {
-      // Clean up uploaded file if database save failed
-      try {
-        const { unlink } = await import('fs/promises');
-        await unlink(filepath);
-      } catch (error) {
-        console.error('Error cleaning up file:', error);
-      }
-
-      return NextResponse.json({ error: 'Failed to save attachment record' }, { status: 500 });
-    }
-
-    const attachment = await createResponse.json();
 
     return NextResponse.json({
       message: 'File uploaded successfully',
-      attachment,
+      attachment: {
+        _id: attachment._id,
+        filename: attachment.filename,
+        originalName: attachment.originalName,
+        mimeType: attachment.mimeType,
+        size: attachment.size,
+        url: attachment.url,
+        type: attachment.type,
+      },
     });
 
   } catch (error) {

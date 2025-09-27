@@ -2,9 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import dbConnect from '@/lib/mongodb';
 import Attachment from '@/models/Attachment';
+import AttachmentLink from '@/models/AttachmentLink';
 import { authOptions } from '@/lib/auth';
-import { unlink } from 'fs/promises';
-import { join } from 'path';
 
 export async function DELETE(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -17,30 +16,29 @@ export async function DELETE(request: NextRequest, { params }: { params: Promise
 
     await dbConnect();
 
-    const attachment = await Attachment.findOne({
-      _id: id,
+    // Find the attachment link to delete (id is the attachment ID)
+    const attachmentLink = await AttachmentLink.findOne({
+      attachmentId: id,
       createdBy: session.user.id,
     });
 
-    if (!attachment) {
-      return NextResponse.json({ error: 'Attachment not found' }, { status: 404 });
+    if (!attachmentLink) {
+      return NextResponse.json({ error: 'Attachment link not found' }, { status: 404 });
     }
 
-    // Delete the file from filesystem
-    try {
-      const filepath = join(process.cwd(), 'public', 'uploads', 'attachments', attachment.filename);
-      await unlink(filepath);
-    } catch (error) {
-      console.error('Error deleting file:', error);
-      // Continue with database deletion even if file deletion fails
-    }
+    // Delete the attachment link
+    await AttachmentLink.findByIdAndDelete(attachmentLink._id);
 
-    // Delete from database
-    await Attachment.findByIdAndDelete(id);
+    // Check if there are any other links to this attachment
+    const remainingLinks = await AttachmentLink.countDocuments({ attachmentId: id });
 
-    return NextResponse.json({ message: 'Attachment deleted successfully' });
+    // If no other links exist, we could optionally delete the attachment data
+    // For now, we'll keep the attachment data for potential future deduplication
+    // This allows the same file content to be used by multiple entities/events
+
+    return NextResponse.json({ message: 'Attachment link deleted successfully' });
   } catch (error) {
-    console.error('Error deleting attachment:', error);
+    console.error('Error deleting attachment link:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

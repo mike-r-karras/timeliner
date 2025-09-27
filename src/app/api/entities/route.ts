@@ -32,6 +32,7 @@ export async function GET(request: NextRequest) {
     }
 
     const entities = await Entity.find({ timelineId })
+      .populate('locationId')
       .sort({ name: 1 });
 
     return NextResponse.json(entities);

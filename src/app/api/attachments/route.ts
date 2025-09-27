@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import dbConnect from '@/lib/mongodb';
 import Attachment from '@/models/Attachment';
+import AttachmentLink from '@/models/AttachmentLink';
 import Event from '@/models/Event';
 import Entity from '@/models/Entity';
 import { authOptions } from '@/lib/auth';
@@ -34,8 +35,20 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({ error: 'Event not found' }, { status: 404 });
       }
 
-      const attachments = await Attachment.find({ eventId })
+      // Find attachments linked to this event
+      const attachmentLinks = await AttachmentLink.find({ eventId })
+        .populate('attachmentId')
         .sort({ createdAt: -1 });
+
+      const attachments = attachmentLinks.map(link => ({
+        _id: link.attachmentId._id,
+        filename: link.attachmentId.filename,
+        originalName: link.attachmentId.originalName,
+        mimeType: link.attachmentId.mimeType,
+        size: link.attachmentId.size,
+        url: link.attachmentId.url,
+        type: link.attachmentId.type,
+      }));
 
       return NextResponse.json(attachments);
     } else {
@@ -48,8 +61,20 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({ error: 'Entity not found' }, { status: 404 });
       }
 
-      const attachments = await Attachment.find({ entityId })
+      // Find attachments linked to this entity
+      const attachmentLinks = await AttachmentLink.find({ entityId })
+        .populate('attachmentId')
         .sort({ createdAt: -1 });
+
+      const attachments = attachmentLinks.map(link => ({
+        _id: link.attachmentId._id,
+        filename: link.attachmentId.filename,
+        originalName: link.attachmentId.originalName,
+        mimeType: link.attachmentId.mimeType,
+        size: link.attachmentId.size,
+        url: link.attachmentId.url,
+        type: link.attachmentId.type,
+      }));
 
       return NextResponse.json(attachments);
     }
@@ -59,81 +84,3 @@ export async function GET(request: NextRequest) {
   }
 }
 
-export async function POST(request: NextRequest) {
-  try {
-    const session = await getServerSession(authOptions);
-    if (!session) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    const {
-      filename,
-      originalName,
-      mimeType,
-      size,
-      url,
-      type,
-      eventId,
-      entityId,
-    } = await request.json();
-
-    if (!filename || !originalName || !mimeType || !size || !url || !type || (!eventId && !entityId)) {
-      return NextResponse.json(
-        { error: 'Missing required attachment fields' },
-        { status: 400 }
-      );
-    }
-
-    await dbConnect();
-
-    // Verify ownership based on the type
-    if (eventId) {
-      const event = await Event.findOne({
-        _id: eventId,
-        createdBy: session.user.id,
-      });
-
-      if (!event) {
-        return NextResponse.json({ error: 'Event not found' }, { status: 404 });
-      }
-
-      const attachment = await Attachment.create({
-        filename,
-        originalName,
-        mimeType,
-        size,
-        url,
-        type,
-        eventId,
-        createdBy: session.user.id,
-      });
-
-      return NextResponse.json(attachment, { status: 201 });
-    } else {
-      const entity = await Entity.findOne({
-        _id: entityId,
-        createdBy: session.user.id,
-      });
-
-      if (!entity) {
-        return NextResponse.json({ error: 'Entity not found' }, { status: 404 });
-      }
-
-      const attachment = await Attachment.create({
-        filename,
-        originalName,
-        mimeType,
-        size,
-        url,
-        type,
-        entityId,
-        createdBy: session.user.id,
-      });
-
-      return NextResponse.json(attachment, { status: 201 });
-    }
-  } catch (error) {
-    console.error('Error creating attachment:', error);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
-  }
-}

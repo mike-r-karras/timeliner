@@ -70,7 +70,7 @@ function AuthenticatedContent() {
   }
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh' }} suppressHydrationWarning>
+    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
       <AppBar position="static" elevation={1}>
         <Toolbar>
           <Typography variant="h6" sx={{ flexGrow: 1 }}>
@@ -127,5 +127,29 @@ const DynamicAuthenticatedContent = dynamic(() => Promise.resolve(AuthenticatedC
 });
 
 export default function HomePage() {
-  return <DynamicAuthenticatedContent />;
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  if (!mounted) {
+    return (
+      <div style={{
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+        minHeight: '100vh',
+        fontFamily: 'system-ui, -apple-system, sans-serif'
+      }}>
+        <span>Loading...</span>
+      </div>
+    );
+  }
+
+  return (
+    <div suppressHydrationWarning>
+      <DynamicAuthenticatedContent />
+    </div>
+  );
 }

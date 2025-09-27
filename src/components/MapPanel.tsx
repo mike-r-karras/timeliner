@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Box, Typography, CircularProgress, IconButton, Tooltip, Fab } from '@mui/material';
 import { Add, MyLocation, Search } from '@mui/icons-material';
 import dynamic from 'next/dynamic';
@@ -39,6 +39,26 @@ interface Event {
   };
 }
 
+interface Entity {
+  _id: string;
+  name: string;
+  type: 'person' | 'organization' | 'place' | 'object' | 'concept' | 'other';
+  description?: string;
+  importance: number;
+  locationId?: {
+    _id: string;
+    name: string;
+    latitude: number;
+    longitude: number;
+    radius?: number;
+    streetAddress?: string;
+    city?: string;
+    stateProvince?: string;
+    country?: string;
+    description?: string;
+  };
+}
+
 interface Location {
   _id: string;
   name: string;
@@ -58,13 +78,15 @@ interface MapPanelProps {
   onSelection?: (type: 'event' | 'entity' | 'location', ids: string[], append?: boolean) => void;
   onAddLocation?: (lat: number, lng: number) => void;
   refreshTrigger?: number;
+  filteredEntityIds?: string[];
 }
 
-export default function MapPanel({ timelineId, selectedItems, onSelection, onAddLocation, refreshTrigger }: MapPanelProps) {
+export default function MapPanel({ timelineId, selectedItems, onSelection, onAddLocation, refreshTrigger, filteredEntityIds }: MapPanelProps) {
   const [loading, setLoading] = useState(false);
   const [events, setEvents] = useState<Event[]>([]);
+  const [entities, setEntities] = useState<Entity[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
-  const [mapCenter, setMapCenter] = useState<[number, number]>([40.7589, -73.9851]); // NYC default
+  const [mapCenter, setMapCenter] = useState<[number, number]>([39.8283, -98.5795]); // Geographic center of US default
   const [mapZoom, setMapZoom] = useState(10);
   const [addingLocation, setAddingLocation] = useState(false);
   const [isClient, setIsClient] = useState(false);
@@ -72,6 +94,19 @@ export default function MapPanel({ timelineId, selectedItems, onSelection, onAdd
 
   useEffect(() => {
     setIsClient(true);
+
+    // Fix Leaflet marker icons
+    if (typeof window !== 'undefined') {
+      // Import Leaflet dynamically to avoid SSR issues
+      import('leaflet').then((L) => {
+        delete (L.Icon.Default.prototype as any)._getIconUrl;
+        L.Icon.Default.mergeOptions({
+          iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png',
+          iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png',
+          shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
+        });
+      });
+    }
   }, []);
 
   useEffect(() => {
@@ -80,12 +115,159 @@ export default function MapPanel({ timelineId, selectedItems, onSelection, onAdd
     }
   }, [timelineId, refreshTrigger]);
 
-  useEffect(() => {
-    // Update map view when events or selections change
-    if (events.length > 0) {
-      updateMapBounds();
+  // Calculate map bounds with useMemo to prevent infinite loops
+  const mapBounds = useMemo(() => {
+    console.log('=== MapBounds calculation triggered ===');
+    console.log('Events count:', events.length, 'Entities count:', entities.length);
+    console.log('Events data:', events.slice(0, 2)); // Show first 2 events
+    console.log('Entities data:', entities.slice(0, 2)); // Show first 2 entities
+    console.log('Selected items:', selectedItems);
+    console.log('Filtered entity IDs:', filteredEntityIds);
+
+    if (events.length === 0 && entities.length === 0) {
+      console.log('No events or entities, returning null');
+      return null;
     }
-  }, [events, selectedItems?.events]);
+
+    const selectedEventIds = selectedItems?.events || [];
+    const selectedEntityIds = selectedItems?.entities || [];
+    console.log('Selected items - events:', selectedEventIds, 'entities:', selectedEntityIds);
+
+    // Get items with locations (validate coordinates are valid numbers)
+    let eventsToShow = events.filter(event => {
+      const loc = event.locationId;
+      return loc &&
+        typeof loc.latitude === 'number' &&
+        typeof loc.longitude === 'number' &&
+        !isNaN(loc.latitude) &&
+        !isNaN(loc.longitude) &&
+        Math.abs(loc.latitude) <= 90 &&
+        Math.abs(loc.longitude) <= 180;
+    });
+    let entitiesToShow = entities.filter(entity => {
+      const loc = entity.locationId;
+      return entity.type === 'place' && loc &&
+        typeof loc.latitude === 'number' &&
+        typeof loc.longitude === 'number' &&
+        !isNaN(loc.latitude) &&
+        !isNaN(loc.longitude) &&
+        Math.abs(loc.latitude) <= 90 &&
+        Math.abs(loc.longitude) <= 180;
+    });
+
+    console.log('Items with locations - events:', eventsToShow.length, 'entities:', entitiesToShow.length);
+
+    // Apply entity filter if provided
+    if (filteredEntityIds && filteredEntityIds.length > 0) {
+      console.log('Applying entity filter:', filteredEntityIds);
+      entitiesToShow = entitiesToShow.filter(entity => filteredEntityIds.includes(entity._id));
+      console.log('After entity filter - entities:', entitiesToShow.length);
+    }
+
+    // Filter by selections if any items are selected
+    if (selectedEventIds.length > 0) {
+      eventsToShow = eventsToShow.filter(event => selectedEventIds.includes(event._id));
+    }
+    if (selectedEntityIds.length > 0) {
+      entitiesToShow = entitiesToShow.filter(entity => selectedEntityIds.includes(entity._id));
+    }
+
+    // Combine all locations for bounds calculation
+    const allLocations = [
+      ...eventsToShow.map(event => event.locationId!),
+      ...entitiesToShow.map(entity => entity.locationId!)
+    ];
+
+    console.log('All locations for bounds:', allLocations.map(loc => ({ name: loc.name, lat: loc.latitude, lng: loc.longitude })));
+
+    if (allLocations.length === 0) {
+      console.log('No locations found, returning null');
+      return null;
+    }
+
+    if (allLocations.length === 1) {
+      console.log('Single location found:', allLocations[0].name, 'at', allLocations[0].latitude, allLocations[0].longitude);
+      return {
+        center: [allLocations[0].latitude, allLocations[0].longitude] as [number, number],
+        zoom: 15
+      };
+    }
+
+    // Calculate bounds
+    const lats = allLocations.map(loc => loc.latitude);
+    const lngs = allLocations.map(loc => loc.longitude);
+    const minLat = Math.min(...lats);
+    const maxLat = Math.max(...lats);
+    const minLng = Math.min(...lngs);
+    const maxLng = Math.max(...lngs);
+
+    const centerLat = (minLat + maxLat) / 2;
+    const centerLng = (minLng + maxLng) / 2;
+
+    console.log('Calculated bounds:', { minLat, maxLat, minLng, maxLng });
+    console.log('Calculated center:', { centerLat, centerLng });
+
+    // Calculate zoom level based on bounds with padding
+    const latDiff = maxLat - minLat;
+    const lngDiff = maxLng - minLng;
+    const maxDiff = Math.max(latDiff, lngDiff);
+
+    let zoom = 10;
+    if (maxDiff < 0.01) zoom = 15;
+    else if (maxDiff < 0.05) zoom = 13;
+    else if (maxDiff < 0.1) zoom = 12;
+    else if (maxDiff < 0.5) zoom = 10;
+    else if (maxDiff < 1) zoom = 9;
+    else zoom = 8;
+
+    console.log('Final map bounds result:', { center: [centerLat, centerLng], zoom });
+
+    return {
+      center: [centerLat, centerLng] as [number, number],
+      zoom
+    };
+  }, [events, entities, selectedItems?.events, selectedItems?.entities, filteredEntityIds]);
+
+  // Update map when bounds change
+  useEffect(() => {
+    if (mapBounds && mapRef.current) {
+      console.log('Updating map bounds to:', mapBounds.center, 'zoom:', mapBounds.zoom);
+      setMapCenter(mapBounds.center);
+      setMapZoom(mapBounds.zoom);
+    } else if (events.length > 0 || entities.length > 0) {
+      console.log('No map bounds calculated, staying at current position:', mapCenter);
+
+      // As a fallback, try to center on the first available location
+      const firstEventWithLocation = events.find(event => {
+        const loc = event.locationId;
+        return loc &&
+          typeof loc.latitude === 'number' &&
+          typeof loc.longitude === 'number' &&
+          !isNaN(loc.latitude) &&
+          !isNaN(loc.longitude) &&
+          Math.abs(loc.latitude) <= 90 &&
+          Math.abs(loc.longitude) <= 180;
+      });
+      const firstEntityWithLocation = entities.find(entity => {
+        const loc = entity.locationId;
+        return entity.type === 'place' && loc &&
+          typeof loc.latitude === 'number' &&
+          typeof loc.longitude === 'number' &&
+          !isNaN(loc.latitude) &&
+          !isNaN(loc.longitude) &&
+          Math.abs(loc.latitude) <= 90 &&
+          Math.abs(loc.longitude) <= 180;
+      });
+
+      const fallbackLocation = firstEventWithLocation?.locationId || firstEntityWithLocation?.locationId;
+      if (fallbackLocation && mapRef.current) {
+        console.log('Using fallback location:', fallbackLocation.name, 'at', fallbackLocation.latitude, fallbackLocation.longitude);
+        const fallbackCenter: [number, number] = [fallbackLocation.latitude, fallbackLocation.longitude];
+        setMapCenter(fallbackCenter);
+        setMapZoom(12);
+      }
+    }
+  }, [mapBounds, events, entities, mapCenter]);
 
   useEffect(() => {
     // Update map view when center/zoom changes
@@ -97,14 +279,29 @@ export default function MapPanel({ timelineId, selectedItems, onSelection, onAdd
   const fetchMapData = async () => {
     setLoading(true);
     try {
-      const [eventsResponse, locationsResponse] = await Promise.all([
+      console.log('Fetching map data for timelineId:', timelineId);
+      const [eventsResponse, entitiesResponse, locationsResponse] = await Promise.all([
         fetch(`/api/events?timelineId=${timelineId}`),
+        fetch(`/api/entities?timelineId=${timelineId}`),
         fetch('/api/locations')
       ]);
 
       if (eventsResponse.ok) {
         const eventData = await eventsResponse.json();
+        console.log('Fetched events:', eventData.length, 'events');
+        console.log('Sample event:', eventData[0]);
         setEvents(eventData);
+      } else {
+        console.error('Failed to fetch events:', eventsResponse.status, eventsResponse.statusText);
+      }
+
+      if (entitiesResponse.ok) {
+        const entityData = await entitiesResponse.json();
+        console.log('Fetched entities:', entityData.length, 'entities');
+        console.log('Sample entity:', entityData[0]);
+        setEntities(entityData);
+      } else {
+        console.error('Failed to fetch entities:', entitiesResponse.status, entitiesResponse.statusText);
       }
 
       if (locationsResponse.ok) {
@@ -118,61 +315,6 @@ export default function MapPanel({ timelineId, selectedItems, onSelection, onAdd
     }
   };
 
-  const updateMapBounds = () => {
-    // Prioritize selected events, then fall back to all events
-    const selectedEventIds = selectedItems?.events || [];
-    let eventsToShow = events.filter(event => event.locationId?.latitude && event.locationId?.longitude);
-
-    if (selectedEventIds.length > 0) {
-      // Filter to only selected events that have locations
-      eventsToShow = eventsToShow.filter(event => selectedEventIds.includes(event._id));
-    }
-
-    if (eventsToShow.length === 0) {
-      // If no selected events with locations, fall back to all events with locations
-      eventsToShow = events.filter(event => event.locationId?.latitude && event.locationId?.longitude);
-    }
-
-    if (eventsToShow.length === 0) return;
-
-    if (eventsToShow.length === 1) {
-      const event = eventsToShow[0];
-      setMapCenter([event.locationId!.latitude, event.locationId!.longitude]);
-      setMapZoom(14);
-    } else {
-      // Calculate bounds to fit all events
-      const latitudes = eventsToShow.map(event => event.locationId!.latitude);
-      const longitudes = eventsToShow.map(event => event.locationId!.longitude);
-
-      const minLat = Math.min(...latitudes);
-      const maxLat = Math.max(...latitudes);
-      const minLng = Math.min(...longitudes);
-      const maxLng = Math.max(...longitudes);
-
-      const centerLat = (minLat + maxLat) / 2;
-      const centerLng = (minLng + maxLng) / 2;
-
-      setMapCenter([centerLat, centerLng]);
-
-      // Calculate zoom level based on bounds with padding
-      const latDiff = maxLat - minLat;
-      const lngDiff = maxLng - minLng;
-      const maxDiff = Math.max(latDiff, lngDiff);
-
-      let zoom = 10;
-      if (maxDiff < 0.005) zoom = 16;
-      else if (maxDiff < 0.01) zoom = 15;
-      else if (maxDiff < 0.05) zoom = 13;
-      else if (maxDiff < 0.1) zoom = 12;
-      else if (maxDiff < 0.5) zoom = 10;
-      else if (maxDiff < 1) zoom = 9;
-      else if (maxDiff < 5) zoom = 7;
-      else if (maxDiff < 10) zoom = 6;
-      else zoom = 4;
-
-      setMapZoom(zoom);
-    }
-  };
 
   const handleEventMarkerClick = (eventId: string, shiftKey: boolean) => {
     if (onSelection) {
@@ -216,8 +358,18 @@ export default function MapPanel({ timelineId, selectedItems, onSelection, onAdd
     return selectedItems?.events?.includes(eventId) || false;
   };
 
+  const isEntitySelected = (entityId: string) => {
+    return selectedItems?.entities?.includes(entityId) || false;
+  };
+
   const isLocationSelected = (locationId: string) => {
     return selectedItems?.locations?.includes(locationId) || false;
+  };
+
+  const handleEntityMarkerClick = (entityId: string, shiftKey: boolean) => {
+    if (onSelection) {
+      onSelection('entity', [entityId], shiftKey);
+    }
   };
 
   const getImportanceColor = (importance: number) => {
@@ -240,7 +392,7 @@ export default function MapPanel({ timelineId, selectedItems, onSelection, onAdd
   }
 
   return (
-    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', position: 'relative' }}>
+    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', position: 'relative' }} suppressHydrationWarning>
       {/* Map Controls */}
       <Box sx={{
         position: 'absolute',
@@ -280,7 +432,7 @@ export default function MapPanel({ timelineId, selectedItems, onSelection, onAdd
       </Tooltip>
 
       {/* Map Container */}
-      <Box sx={{ flex: 1, minHeight: 0 }}>
+      <Box sx={{ flex: 1, minHeight: 0 }} suppressHydrationWarning>
         {isClient ? (
           <MapContainer
             center={mapCenter}
@@ -394,10 +546,107 @@ export default function MapPanel({ timelineId, selectedItems, onSelection, onAdd
               );
             })}
 
+          {/* Place Entity Markers */}
+          {entities
+            .filter(entity =>
+              entity.type === 'place' &&
+              entity.locationId?.latitude &&
+              entity.locationId?.longitude &&
+              (!filteredEntityIds || filteredEntityIds.length === 0 || filteredEntityIds.includes(entity._id))
+            )
+            .map((entity) => {
+              const location = entity.locationId!;
+              const isSelected = isEntitySelected(entity._id);
+
+              return (
+                <React.Fragment key={`entity-${entity._id}`}>
+                  {/* Add pulsing outer ring for selected entities */}
+                  {isSelected && (
+                    <CircleMarker
+                      center={[location.latitude, location.longitude]}
+                      radius={30}
+                      pathOptions={{
+                        fillColor: '#4CAF50', // Green for place entities
+                        fillOpacity: 0.2,
+                        color: '#4CAF50',
+                        weight: 2,
+                        className: 'pulsing-marker'
+                      }}
+                    />
+                  )}
+
+                  {/* Main entity marker */}
+                  <CircleMarker
+                    center={[location.latitude, location.longitude]}
+                    radius={15}
+                    pathOptions={{
+                      fillColor: '#4CAF50', // Green for place entities
+                      fillOpacity: isSelected ? 0.8 : 0.6,
+                      color: '#388E3C',
+                      weight: isSelected ? 3 : 2,
+                      stroke: true,
+                    }}
+                    eventHandlers={{
+                      click: (e) => {
+                        handleEntityMarkerClick(entity._id, e.originalEvent.shiftKey);
+                      },
+                    }}
+                  >
+                    <Popup>
+                      <Box>
+                        <Typography variant="subtitle2" sx={{ fontWeight: 'bold', color: '#4CAF50' }}>
+                          📍 {entity.name}
+                        </Typography>
+                        <Typography variant="caption" sx={{ color: '#4CAF50', fontWeight: 'medium' }}>
+                          Place Entity
+                        </Typography>
+                        {entity.description && (
+                          <Typography variant="body2" sx={{ mt: 1 }}>
+                            {entity.description}
+                          </Typography>
+                        )}
+                        <Box sx={{ display: 'flex', alignItems: 'center', mt: 1, gap: 1 }}>
+                          <Typography variant="caption">Importance:</Typography>
+                          <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                            {'★'.repeat(entity.importance)}{'☆'.repeat(5 - entity.importance)}
+                          </Box>
+                        </Box>
+                        <Typography variant="caption" sx={{ mt: 1, display: 'block' }}>
+                          Location: {location.name}
+                        </Typography>
+                        {isSelected && (
+                          <Typography variant="caption" display="block" sx={{ mt: 1, color: '#4CAF50', fontWeight: 'bold' }}>
+                            ● Selected Place Entity
+                          </Typography>
+                        )}
+                      </Box>
+                    </Popup>
+                  </CircleMarker>
+
+                  {/* Entity location radius circle */}
+                  {location.radius && (
+                    <Circle
+                      center={[location.latitude, location.longitude]}
+                      radius={location.radius}
+                      pathOptions={{
+                        fillColor: '#4CAF50',
+                        fillOpacity: isSelected ? 0.2 : 0.1,
+                        color: '#4CAF50',
+                        weight: isSelected ? 3 : 1,
+                      }}
+                    />
+                  )}
+                </React.Fragment>
+              );
+            })}
+
           {/* Standalone Location Markers */}
           {locations
             .filter(location => location.latitude && location.longitude)
-            .filter(location => !events.some(event => event.locationId?._id === location._id))
+            .filter(location =>
+              !events.some(event => event.locationId?._id === location._id) &&
+              !entities.some(entity => entity.locationId?._id === location._id)
+            )
             .map((location) => {
               const isSelected = isLocationSelected(location._id);
 

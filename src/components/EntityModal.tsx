@@ -48,6 +48,7 @@ interface EntityModalProps {
   timelineId: string | null;
   onEntityCreated: () => void;
   entityId?: string;
+  defaultType?: string;
 }
 
 const entityTypes = [
@@ -65,10 +66,11 @@ export default function EntityModal({
   timelineId,
   onEntityCreated,
   entityId,
+  defaultType,
 }: EntityModalProps) {
   const [formData, setFormData] = useState({
     name: '',
-    type: 'person',
+    type: defaultType || 'person',
     description: '',
     importance: 3,
     locationId: '',
@@ -82,6 +84,7 @@ export default function EntityModal({
   const [selectedAttachment, setSelectedAttachment] = useState<Attachment | null>(null);
   const [locations, setLocations] = useState<Location[]>([]);
   const [locationModalOpen, setLocationModalOpen] = useState(false);
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
 
   useEffect(() => {
     if (open) {
@@ -92,18 +95,19 @@ export default function EntityModal({
         resetForm();
       }
     }
-  }, [open, entityId]);
+  }, [open, entityId, defaultType]);
 
   const resetForm = () => {
     setFormData({
       name: '',
-      type: 'person',
+      type: defaultType || 'person',
       description: '',
       importance: 3,
       locationId: '',
     });
     setError('');
     setAttachments([]);
+    setPendingFiles([]);
   };
 
   const fetchLocations = async () => {
@@ -173,6 +177,13 @@ export default function EntityModal({
       });
 
       if (response.ok) {
+        const savedEntity = await response.json();
+
+        // If this is a new entity and we have pending files, upload them now
+        if (!entityId && pendingFiles.length > 0) {
+          await uploadPendingFiles(savedEntity._id);
+        }
+
         onEntityCreated();
         onClose();
       } else {
@@ -186,22 +197,16 @@ export default function EntityModal({
     }
   };
 
-  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const files = event.target.files;
-    if (!files || files.length === 0) return;
+  const uploadPendingFiles = async (newEntityId: string) => {
+    if (pendingFiles.length === 0) return;
 
-    setUploading(true);
     const uploadedAttachments: Attachment[] = [];
 
     try {
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i];
+      for (const file of pendingFiles) {
         const formData = new FormData();
         formData.append('file', file);
-
-        if (entityId) {
-          formData.append('entityId', entityId);
-        }
+        formData.append('entityId', newEntityId);
 
         const response = await fetch('/api/attachments/upload', {
           method: 'POST',
@@ -215,17 +220,82 @@ export default function EntityModal({
       }
 
       setAttachments(prev => [...prev, ...uploadedAttachments]);
+      setPendingFiles([]);
     } catch (error) {
-      console.error('Upload failed:', error);
-      setError('Failed to upload files');
-    } finally {
-      setUploading(false);
-      // Clear the input
-      event.target.value = '';
+      console.error('Upload pending files failed:', error);
     }
   };
 
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = event.target.files;
+    if (!files || files.length === 0) return;
+
+    const fileArray = Array.from(files);
+
+    if (entityId) {
+      // Entity exists, upload immediately
+      setUploading(true);
+      const uploadedAttachments: Attachment[] = [];
+
+      try {
+        for (const file of fileArray) {
+          const formData = new FormData();
+          formData.append('file', file);
+          formData.append('entityId', entityId);
+
+          const response = await fetch('/api/attachments/upload', {
+            method: 'POST',
+            body: formData,
+          });
+
+          if (response.ok) {
+            const result = await response.json();
+            uploadedAttachments.push(result.attachment);
+          }
+        }
+
+        setAttachments(prev => [...prev, ...uploadedAttachments]);
+      } catch (error) {
+        console.error('Upload failed:', error);
+        setError('Failed to upload files');
+      } finally {
+        setUploading(false);
+      }
+    } else {
+      // New entity, store files for later upload
+      setPendingFiles(prev => [...prev, ...fileArray]);
+
+      // Create preview objects for pending files
+      const previewAttachments = fileArray.map(file => ({
+        _id: `pending-${Date.now()}-${Math.random()}`, // Temporary ID
+        filename: file.name,
+        originalName: file.name,
+        mimeType: file.type,
+        size: file.size,
+        url: '', // No URL yet since it's not uploaded
+        type: getFileType(file.type),
+      }));
+
+      setAttachments(prev => [...prev, ...previewAttachments]);
+    }
+
+    // Clear the input
+    event.target.value = '';
+  };
+
   const handleAttachmentDelete = async (attachmentId: string) => {
+    // Check if it's a pending file (temporary ID starts with "pending-")
+    if (attachmentId.startsWith('pending-')) {
+      // Remove from pending files and attachments
+      const attachment = attachments.find(att => att._id === attachmentId);
+      if (attachment) {
+        setPendingFiles(prev => prev.filter(file => file.name !== attachment.originalName));
+        setAttachments(prev => prev.filter(att => att._id !== attachmentId));
+      }
+      return;
+    }
+
+    // For existing attachments, call the API to delete
     try {
       const response = await fetch(`/api/attachments/${attachmentId}`, {
         method: 'DELETE',
@@ -240,6 +310,11 @@ export default function EntityModal({
   };
 
   const handleAttachmentView = (attachment: Attachment) => {
+    // Don't allow viewing pending files (they don't have URLs yet)
+    if (attachment._id.startsWith('pending-')) {
+      return;
+    }
+
     setSelectedAttachment(attachment);
     setViewerOpen(true);
   };
@@ -257,6 +332,14 @@ export default function EntityModal({
     setLocations(prev => [...prev, location]);
     setFormData(prev => ({ ...prev, locationId: location._id }));
     setLocationModalOpen(false);
+  };
+
+  const getFileType = (mimeType: string): 'photo' | 'video' | 'audio' | 'document' | 'other' => {
+    if (mimeType.startsWith('image/')) return 'photo';
+    if (mimeType.startsWith('video/')) return 'video';
+    if (mimeType.startsWith('audio/')) return 'audio';
+    if (mimeType === 'application/pdf' || mimeType.includes('text/')) return 'document';
+    return 'other';
   };
 
   const formatFileSize = (bytes: number) => {
@@ -427,6 +510,7 @@ export default function EntityModal({
                         <IconButton
                           size="small"
                           onClick={() => handleAttachmentView(attachment)}
+                          disabled={attachment._id.startsWith('pending-')}
                         >
                           <Visibility fontSize="small" />
                         </IconButton>

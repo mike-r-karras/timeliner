@@ -22,7 +22,7 @@ import {
   ListItem,
   ListItemText,
 } from '@mui/material';
-import { Edit, ZoomIn, ZoomOut, Add, Link, Delete } from '@mui/icons-material';
+import { Edit, ZoomIn, ZoomOut, Add, Link, Delete, Bolt } from '@mui/icons-material';
 import { format } from 'date-fns';
 import AttachmentViewer from './AttachmentViewer';
 
@@ -53,9 +53,10 @@ interface TimelinePanelProps {
   onEditEvent?: (eventId: string) => void;
   onAddEvent?: () => void;
   refreshTrigger?: number;
+  onStartConnection?: (sourceType: 'event', sourceId: string, sourceName: string) => void;
 }
 
-export default function TimelinePanel({ timelineId, selectedItems, onSelection, onEditEvent, onAddEvent, refreshTrigger }: TimelinePanelProps) {
+export default function TimelinePanel({ timelineId, selectedItems, onSelection, onEditEvent, onAddEvent, refreshTrigger, onStartConnection }: TimelinePanelProps) {
   const [loading, setLoading] = useState(false);
   const [events, setEvents] = useState<Event[]>([]);
   const [eventAttachments, setEventAttachments] = useState<Record<string, Attachment[]>>({});
@@ -785,6 +786,7 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
                   >
                     {/* Event card */}
                     <Card
+                      data-event-id={event._id}
                       sx={{
                         width: '100%',
                         cursor: 'pointer',
@@ -800,7 +802,7 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
                           <>
                             {/* Expanded view: title and controls row */}
                             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 1 }}>
-                              <Typography variant="h6" sx={{ flex: 1, fontSize: '0.95rem', fontWeight: 'bold' }}>
+                              <Typography variant="h6" sx={{ flex: 1, fontSize: '0.95rem', fontWeight: 'bold' }} className="event-name">
                                 {event.title}
                               </Typography>
                               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -819,6 +821,19 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
                                 >
                                   <Edit fontSize="small" />
                                 </IconButton>
+                                {onStartConnection && (
+                                  <IconButton
+                                    size="small"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      onStartConnection('event', event._id, event.title);
+                                    }}
+                                    sx={{ opacity: 0.7, '&:hover': { opacity: 1, color: 'warning.main' } }}
+                                    title="Create connection"
+                                  >
+                                    <Bolt fontSize="small" />
+                                  </IconButton>
+                                )}
                                 <IconButton
                                   size="small"
                                   onClick={(e) => {
@@ -844,6 +859,7 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
                           /* Collapsed view: single line "Title - Date" */
                           <Typography
                             variant="body2"
+                            className="event-name"
                             sx={{
                               fontSize: '0.9rem',
                               fontWeight: 'medium',
@@ -1002,6 +1018,7 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
                               )}
                             </Box>
                           }
+                          secondaryTypographyProps={{ component: 'div' }}
                         />
                       </ListItem>
                     ))}
@@ -1029,6 +1046,7 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
                               )}
                             </Box>
                           }
+                          secondaryTypographyProps={{ component: 'div' }}
                         />
                       </ListItem>
                     ))}
@@ -1060,6 +1078,7 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
                               )}
                             </Box>
                           }
+                          secondaryTypographyProps={{ component: 'div' }}
                         />
                       </ListItem>
                     ))}

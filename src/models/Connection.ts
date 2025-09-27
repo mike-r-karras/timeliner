@@ -6,7 +6,10 @@ export interface IConnection extends Document {
   sourceId: string;
   targetId: string;
   relationshipType: string;
+  tags?: string[];
   description?: string;
+  startArrow: 'none' | 'arrow';
+  endArrow: 'none' | 'arrow';
   timelineId: string;
   createdBy: string;
   createdAt: Date;
@@ -35,9 +38,23 @@ const ConnectionSchema = new Schema<IConnection>(
       required: true,
       maxlength: 100,
     },
+    tags: {
+      type: [String],
+      default: [],
+    },
     description: {
       type: String,
       maxlength: 1000,
+    },
+    startArrow: {
+      type: String,
+      enum: ['none', 'arrow'],
+      default: 'none',
+    },
+    endArrow: {
+      type: String,
+      enum: ['none', 'arrow'],
+      default: 'none',
     },
     timelineId: {
       type: Schema.Types.ObjectId,
