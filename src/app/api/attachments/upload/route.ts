@@ -22,6 +22,15 @@ export async function POST(request: NextRequest) {
     const entityId = data.get('entityId') as string;
     const attachmentType = data.get('type') as string || 'other';
 
+    // Extract metadata, converting empty strings and null to undefined
+    const caption = (data.get('caption') as string)?.trim() || undefined;
+    const altText = (data.get('altText') as string)?.trim() || undefined;
+    const creator = (data.get('creator') as string)?.trim() || undefined;
+    const creditLine = (data.get('creditLine') as string)?.trim() || undefined;
+    const copyright = (data.get('copyright') as string)?.trim() || undefined;
+    const dateStr = (data.get('date') as string)?.trim() || undefined;
+    const date = dateStr ? new Date(dateStr) : undefined;
+
     if (!file) {
       return NextResponse.json({ error: 'No file uploaded' }, { status: 400 });
     }
@@ -97,8 +106,31 @@ export async function POST(request: NextRequest) {
         type: finalType,
         contentHash,
         data: buffer,
+        caption,
+        altText,
+        creator,
+        creditLine,
+        copyright,
+        date,
         createdBy: session.user.id,
       });
+    } else {
+      // Update metadata on existing attachment if provided
+      if (caption !== undefined || altText !== undefined || creator !== undefined ||
+          creditLine !== undefined || copyright !== undefined || date !== undefined) {
+        attachment = await Attachment.findByIdAndUpdate(
+          attachment._id,
+          {
+            caption,
+            altText,
+            creator,
+            creditLine,
+            copyright,
+            date,
+          },
+          { new: true }
+        );
+      }
     }
 
     // Create link between attachment and entity/event
@@ -119,6 +151,12 @@ export async function POST(request: NextRequest) {
         size: attachment.size,
         url: attachment.url,
         type: attachment.type,
+        caption: attachment.caption,
+        altText: attachment.altText,
+        creator: attachment.creator,
+        creditLine: attachment.creditLine,
+        copyright: attachment.copyright,
+        date: attachment.date,
       },
     });
 

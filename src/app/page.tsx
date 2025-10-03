@@ -16,6 +16,7 @@ import {
 import { AccountCircle, Settings, ExitToApp } from '@mui/icons-material';
 import { signOut } from 'next-auth/react';
 import TimelineInterface from '@/components/TimelineInterface';
+import Footer from '@/components/Footer';
 import dynamic from 'next/dynamic';
 
 // Create a client-only wrapper for the authenticated content
@@ -73,9 +74,16 @@ function AuthenticatedContent() {
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
       <AppBar position="static" elevation={1}>
         <Toolbar>
-          <Typography variant="h6" sx={{ flexGrow: 1 }}>
-            Timeliner
-          </Typography>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexGrow: 1 }}>
+            <img
+              src="/logo.png"
+              alt="Timeliner Logo"
+              style={{ height: '56px', width: 'auto' }}
+            />
+            <Typography variant="h6" sx={{ fontWeight: 'bold' }}>
+              Timeliner
+            </Typography>
+          </Box>
           <IconButton color="inherit" onClick={handleMenuOpen}>
             <AccountCircle />
           </IconButton>
@@ -103,9 +111,11 @@ function AuthenticatedContent() {
         </Toolbar>
       </AppBar>
 
-      <Box sx={{ flex: 1, overflow: 'hidden' }}>
+      <Box sx={{ flex: 1, overflow: 'hidden', mb: '20px' }}>
         <TimelineInterface userId={session.user.id} />
       </Box>
+
+      <Footer />
     </Box>
   );
 }
@@ -134,17 +144,7 @@ export default function HomePage() {
   }, []);
 
   if (!mounted) {
-    return (
-      <div style={{
-        display: 'flex',
-        justifyContent: 'center',
-        alignItems: 'center',
-        minHeight: '100vh',
-        fontFamily: 'system-ui, -apple-system, sans-serif'
-      }}>
-        <span>Loading...</span>
-      </div>
-    );
+    return null; // Return null to avoid hydration mismatch
   }
 
   return (

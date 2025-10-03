@@ -5,6 +5,8 @@ export interface IConnection extends Document {
   type: 'event-entity' | 'event-event' | 'entity-entity';
   sourceId: string;
   targetId: string;
+  sourceModel: 'Event' | 'Entity';
+  targetModel: 'Event' | 'Entity';
   relationshipType: string;
   tags?: string[];
   description?: string;
@@ -32,6 +34,16 @@ const ConnectionSchema = new Schema<IConnection>(
       type: Schema.Types.ObjectId,
       required: true,
       refPath: 'targetModel',
+    },
+    sourceModel: {
+      type: String,
+      enum: ['Event', 'Entity'],
+      required: true,
+    },
+    targetModel: {
+      type: String,
+      enum: ['Event', 'Entity'],
+      required: true,
     },
     relationshipType: {
       type: String,

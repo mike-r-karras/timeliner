@@ -11,6 +11,7 @@ import {
   Typography,
   IconButton,
   CircularProgress,
+  Tooltip,
 } from '@mui/material';
 import { Close, Download } from '@mui/icons-material';
 
@@ -22,6 +23,12 @@ interface Attachment {
   size: number;
   url: string;
   type: 'photo' | 'video' | 'audio' | 'document' | 'other';
+  caption?: string;
+  altText?: string;
+  creator?: string;
+  creditLine?: string;
+  copyright?: string;
+  date?: string;
 }
 
 interface AttachmentViewerProps {
@@ -96,36 +103,114 @@ export default function AttachmentViewer({ open, onClose, attachment }: Attachme
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
 
+  const getSourceLine = () => {
+    if (!attachment.creator && !attachment.creditLine) return null;
+
+    if (attachment.creator && attachment.creditLine) {
+      return `[Source: ${attachment.creator}, ${attachment.creditLine}]`;
+    } else if (attachment.creator) {
+      return `[Source: ${attachment.creator}]`;
+    } else {
+      return `[Source: ${attachment.creditLine}]`;
+    }
+  };
+
   const renderContent = () => {
     if (attachment.mimeType.startsWith('image/')) {
-      return (
+      const imageElement = (
         <Box
           component="img"
           src={attachment.url}
-          alt={attachment.originalName}
+          alt={attachment.altText || attachment.originalName}
           sx={{
             maxWidth: '100%',
-            maxHeight: '70vh',
+            maxHeight: '60vh',
             objectFit: 'contain',
             display: 'block',
             margin: '0 auto',
           }}
         />
       );
+
+      return (
+        <Box>
+          {attachment.altText ? (
+            <Tooltip title={attachment.altText} placement="top">
+              {imageElement}
+            </Tooltip>
+          ) : (
+            imageElement
+          )}
+
+          {/* Caption and metadata below image */}
+          {(attachment.caption || getSourceLine() || attachment.copyright || attachment.date) && (
+            <Box sx={{ mt: 2, px: 2 }}>
+              {attachment.caption && (
+                <Typography variant="body2" sx={{ mb: 1, fontStyle: 'italic' }}>
+                  {attachment.caption}
+                </Typography>
+              )}
+              {getSourceLine() && (
+                <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 0.5 }}>
+                  {getSourceLine()}
+                </Typography>
+              )}
+              {attachment.copyright && (
+                <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 0.5 }}>
+                  © {attachment.copyright}
+                </Typography>
+              )}
+              {attachment.date && (
+                <Typography variant="caption" color="text.secondary" display="block">
+                  {new Date(attachment.date).toLocaleDateString()}
+                </Typography>
+              )}
+            </Box>
+          )}
+        </Box>
+      );
     } else if (attachment.mimeType.startsWith('video/')) {
       return (
-        <Box
-          component="video"
-          controls
-          sx={{
-            maxWidth: '100%',
-            maxHeight: '70vh',
-            display: 'block',
-            margin: '0 auto',
-          }}
-        >
-          <source src={attachment.url} type={attachment.mimeType} />
-          Your browser does not support the video tag.
+        <Box>
+          <Box
+            component="video"
+            controls
+            sx={{
+              maxWidth: '100%',
+              maxHeight: '60vh',
+              display: 'block',
+              margin: '0 auto',
+            }}
+          >
+            <source src={attachment.url} type={attachment.mimeType} />
+            Your browser does not support the video tag.
+          </Box>
+
+          {/* Caption and metadata below video */}
+          {(attachment.caption || getSourceLine() || attachment.copyright || attachment.date) && (
+            <Box sx={{ mt: 2, px: 2 }}>
+              {attachment.caption && (
+                <Typography variant="body2" sx={{ mb: 1, fontStyle: 'italic' }}>
+                  {attachment.caption}
+                </Typography>
+              )}
+              {getSourceLine() && (
+                <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 0.5 }}>
+                  {getSourceLine()}
+                </Typography>
+              )}
+              {attachment.copyright && (
+                <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 0.5 }}>
+                  © {attachment.copyright}
+                </Typography>
+              )}
+              {attachment.date && (
+                <Typography variant="caption" color="text.secondary" display="block">
+                  {new Date(attachment.date).toLocaleDateString()}
+                </Typography>
+              )}
+            </Box>
+          )}
         </Box>
       );
     } else if (attachment.mimeType.startsWith('audio/')) {
@@ -150,108 +235,190 @@ export default function AttachmentViewer({ open, onClose, attachment }: Attachme
             <source src={attachment.url} type={attachment.mimeType} />
             Your browser does not support the audio tag.
           </Box>
+
+          {/* Caption and metadata below audio */}
+          {(attachment.caption || getSourceLine() || attachment.copyright || attachment.date) && (
+            <Box sx={{ mt: 2 }}>
+              {attachment.caption && (
+                <Typography variant="body2" sx={{ mb: 1, fontStyle: 'italic' }}>
+                  {attachment.caption}
+                </Typography>
+              )}
+              {getSourceLine() && (
+                <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 0.5 }}>
+                  {getSourceLine()}
+                </Typography>
+              )}
+              {attachment.copyright && (
+                <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 0.5 }}>
+                  © {attachment.copyright}
+                </Typography>
+              )}
+              {attachment.date && (
+                <Typography variant="caption" color="text.secondary" display="block">
+                  {new Date(attachment.date).toLocaleDateString()}
+                </Typography>
+              )}
+            </Box>
+          )}
         </Box>
       );
     } else if (isTextFile(attachment)) {
       return (
-        <Box sx={{ height: '70vh', width: '100%', position: 'relative' }}>
-          {loadingText ? (
-            <Box sx={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              height: '100%'
-            }}>
-              <CircularProgress />
-              <Typography sx={{ ml: 2 }}>Loading file content...</Typography>
-            </Box>
-          ) : textError ? (
-            <Box sx={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              height: '100%',
-              flexDirection: 'column'
-            }}>
-              <Typography color="error" gutterBottom>
-                {textError}
-              </Typography>
-              <Button onClick={fetchTextContent} variant="outlined" size="small">
-                Retry
-              </Button>
-            </Box>
-          ) : (
-            <Box sx={{
-              height: '100%',
-              overflow: 'auto',
-              backgroundColor: 'grey.50',
-              border: '1px solid',
-              borderColor: 'divider',
-              borderRadius: 1,
-              p: 2,
-            }}>
-              <Box
-                component="pre"
-                sx={{
-                  fontFamily: 'monospace',
-                  fontSize: '0.875rem',
-                  lineHeight: 1.6,
-                  margin: 0,
-                  whiteSpace: 'pre-wrap',
-                  wordBreak: 'break-word',
-                  color: 'text.primary',
-                }}
-              >
-                {textContent}
+        <Box>
+          <Box sx={{ height: '60vh', width: '100%', position: 'relative' }}>
+            {loadingText ? (
+              <Box sx={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                height: '100%'
+              }}>
+                <CircularProgress />
+                <Typography sx={{ ml: 2 }}>Loading file content...</Typography>
               </Box>
+            ) : textError ? (
+              <Box sx={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                height: '100%',
+                flexDirection: 'column'
+              }}>
+                <Typography color="error" gutterBottom>
+                  {textError}
+                </Typography>
+                <Button onClick={fetchTextContent} variant="outlined" size="small">
+                  Retry
+                </Button>
+              </Box>
+            ) : (
+              <Box sx={{
+                height: '100%',
+                overflow: 'auto',
+                backgroundColor: 'grey.50',
+                border: '1px solid',
+                borderColor: 'divider',
+                borderRadius: 1,
+                p: 2,
+              }}>
+                <Box
+                  component="pre"
+                  sx={{
+                    fontFamily: 'monospace',
+                    fontSize: '0.875rem',
+                    lineHeight: 1.6,
+                    margin: 0,
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                    color: 'text.primary',
+                  }}
+                >
+                  {textContent}
+                </Box>
+              </Box>
+            )}
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              sx={{
+                position: 'absolute',
+                bottom: 8,
+                right: 8,
+                backgroundColor: 'rgba(255,255,255,0.9)',
+                padding: '2px 6px',
+                borderRadius: 1,
+                fontSize: '0.7rem'
+              }}
+            >
+              Text Preview
+            </Typography>
+          </Box>
+
+          {/* Caption and metadata below document */}
+          {(attachment.caption || getSourceLine() || attachment.copyright || attachment.date) && (
+            <Box sx={{ mt: 2, px: 2 }}>
+              {attachment.caption && (
+                <Typography variant="body2" sx={{ mb: 1, fontStyle: 'italic' }}>
+                  {attachment.caption}
+                </Typography>
+              )}
+              {getSourceLine() && (
+                <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 0.5 }}>
+                  {getSourceLine()}
+                </Typography>
+              )}
+              {attachment.copyright && (
+                <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 0.5 }}>
+                  © {attachment.copyright}
+                </Typography>
+              )}
+              {attachment.date && (
+                <Typography variant="caption" color="text.secondary" display="block">
+                  {new Date(attachment.date).toLocaleDateString()}
+                </Typography>
+              )}
             </Box>
           )}
-          <Typography
-            variant="caption"
-            color="text.secondary"
-            sx={{
-              position: 'absolute',
-              bottom: 8,
-              right: 8,
-              backgroundColor: 'rgba(255,255,255,0.9)',
-              padding: '2px 6px',
-              borderRadius: 1,
-              fontSize: '0.7rem'
-            }}
-          >
-            Text Preview
-          </Typography>
         </Box>
       );
     } else if (attachment.mimeType === 'application/pdf') {
       return (
-        <Box sx={{ height: '70vh', width: '100%', position: 'relative' }}>
-          <Box
-            component="iframe"
-            src={`${attachment.url}#toolbar=1&navpanes=1&scrollbar=1`}
-            sx={{
-              width: '100%',
-              height: '100%',
-              border: 'none',
-              borderRadius: 1,
-            }}
-            title={attachment.originalName}
-          />
-          <Typography
-            variant="caption"
-            color="text.secondary"
-            sx={{
-              position: 'absolute',
-              bottom: 8,
-              right: 8,
-              backgroundColor: 'rgba(255,255,255,0.9)',
-              padding: '2px 6px',
-              borderRadius: 1,
-              fontSize: '0.7rem'
-            }}
-          >
-            PDF Viewer
-          </Typography>
+        <Box>
+          <Box sx={{ height: '60vh', width: '100%', position: 'relative' }}>
+            <Box
+              component="iframe"
+              src={`${attachment.url}#toolbar=1&navpanes=1&scrollbar=1`}
+              sx={{
+                width: '100%',
+                height: '100%',
+                border: 'none',
+                borderRadius: 1,
+              }}
+              title={attachment.originalName}
+            />
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              sx={{
+                position: 'absolute',
+                bottom: 8,
+                right: 8,
+                backgroundColor: 'rgba(255,255,255,0.9)',
+                padding: '2px 6px',
+                borderRadius: 1,
+                fontSize: '0.7rem'
+              }}
+            >
+              PDF Viewer
+            </Typography>
+          </Box>
+
+          {/* Caption and metadata below PDF */}
+          {(attachment.caption || getSourceLine() || attachment.copyright || attachment.date) && (
+            <Box sx={{ mt: 2, px: 2 }}>
+              {attachment.caption && (
+                <Typography variant="body2" sx={{ mb: 1, fontStyle: 'italic' }}>
+                  {attachment.caption}
+                </Typography>
+              )}
+              {getSourceLine() && (
+                <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 0.5 }}>
+                  {getSourceLine()}
+                </Typography>
+              )}
+              {attachment.copyright && (
+                <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 0.5 }}>
+                  © {attachment.copyright}
+                </Typography>
+              )}
+              {attachment.date && (
+                <Typography variant="caption" color="text.secondary" display="block">
+                  {new Date(attachment.date).toLocaleDateString()}
+                </Typography>
+              )}
+            </Box>
+          )}
         </Box>
       );
     } else {
@@ -268,9 +435,35 @@ export default function AttachmentViewer({ open, onClose, attachment }: Attachme
           <Typography variant="body1" gutterBottom>
             This file type cannot be previewed.
           </Typography>
-          <Typography variant="body2" color="text.secondary">
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
             Click download to view the file.
           </Typography>
+
+          {/* Caption and metadata for non-previewable files */}
+          {(attachment.caption || getSourceLine() || attachment.copyright || attachment.date) && (
+            <Box sx={{ mt: 2 }}>
+              {attachment.caption && (
+                <Typography variant="body2" sx={{ mb: 1, fontStyle: 'italic' }}>
+                  {attachment.caption}
+                </Typography>
+              )}
+              {getSourceLine() && (
+                <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 0.5 }}>
+                  {getSourceLine()}
+                </Typography>
+              )}
+              {attachment.copyright && (
+                <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 0.5 }}>
+                  © {attachment.copyright}
+                </Typography>
+              )}
+              {attachment.date && (
+                <Typography variant="caption" color="text.secondary" display="block">
+                  {new Date(attachment.date).toLocaleDateString()}
+                </Typography>
+              )}
+            </Box>
+          )}
         </Box>
       );
     }
@@ -300,7 +493,7 @@ export default function AttachmentViewer({ open, onClose, attachment }: Attachme
         </IconButton>
       </DialogTitle>
 
-      <DialogContent sx={{ p: 0, overflow: 'hidden' }}>
+      <DialogContent sx={{ p: 0, overflow: 'auto' }}>
         <Box sx={{ p: 2 }}>
           {renderContent()}
         </Box>

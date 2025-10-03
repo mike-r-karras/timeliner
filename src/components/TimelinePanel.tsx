@@ -21,8 +21,9 @@ import {
   List,
   ListItem,
   ListItemText,
+  Tooltip,
 } from '@mui/material';
-import { Edit, ZoomIn, ZoomOut, Add, Link, Delete, Bolt } from '@mui/icons-material';
+import { Edit, ZoomIn, ZoomOut, Add, Link, Delete, Bolt, ExpandMore, ExpandLess } from '@mui/icons-material';
 import { format } from 'date-fns';
 import AttachmentViewer from './AttachmentViewer';
 
@@ -46,6 +47,12 @@ interface Attachment {
   type: 'photo' | 'video' | 'audio' | 'document' | 'other';
 }
 
+interface Link {
+  _id: string;
+  title: string;
+  url: string;
+}
+
 interface TimelinePanelProps {
   timelineId?: string | null;
   selectedItems?: any;
@@ -53,15 +60,26 @@ interface TimelinePanelProps {
   onEditEvent?: (eventId: string) => void;
   onAddEvent?: () => void;
   refreshTrigger?: number;
-  onStartConnection?: (sourceType: 'event', sourceId: string, sourceName: string) => void;
+  onVisibleEventsChange?: (visibleEventIds: string[]) => void;
+  mapReady?: boolean;
 }
 
-export default function TimelinePanel({ timelineId, selectedItems, onSelection, onEditEvent, onAddEvent, refreshTrigger, onStartConnection }: TimelinePanelProps) {
+export default function TimelinePanel({ timelineId, selectedItems, onSelection, onEditEvent, onAddEvent, refreshTrigger, onVisibleEventsChange, mapReady }: TimelinePanelProps) {
   const [loading, setLoading] = useState(false);
   const [events, setEvents] = useState<Event[]>([]);
   const [eventAttachments, setEventAttachments] = useState<Record<string, Attachment[]>>({});
+  const [eventLinks, setEventLinks] = useState<Record<string, Link[]>>({});
+  const [expandedLinks, setExpandedLinks] = useState<Set<string>>(new Set());
   const [timelineTitle, setTimelineTitle] = useState('Untitled');
-  const [zoomLevel, setZoomLevel] = useState(50);
+
+  // Client-only logging to prevent hydration mismatches
+  const clientLog = (...args: any[]) => {
+    if (typeof window !== 'undefined') {
+      console.log(...args);
+    }
+  };
+  const [zoomLevel, setZoomLevel] = useState(100);
+  const [prevZoomLevel, setPrevZoomLevel] = useState(100);
   const [editingTitle, setEditingTitle] = useState(false);
   const [viewerOpen, setViewerOpen] = useState(false);
   const [selectedAttachment, setSelectedAttachment] = useState<Attachment | null>(null);
@@ -69,6 +87,10 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ y: 0, scrollTop: 0 });
   const timelineScrollRef = React.useRef<HTMLDivElement>(null);
+  const containerRef = React.useRef<HTMLDivElement>(null);
+  const headerRef = React.useRef<HTMLDivElement>(null);
+  const expandRef = React.useRef<HTMLDivElement>(null);
+  const [availableHeight, setAvailableHeight] = useState(0);
 
   // URL parsing state
   const [quickAddUrl, setQuickAddUrl] = useState('');
@@ -76,21 +98,156 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
   const [parseError, setParseError] = useState<string | null>(null);
   const [parsedDataDialog, setParsedDataDialog] = useState(false);
   const [parsedData, setParsedData] = useState<any>(null);
+  const [parsedUrl, setParsedUrl] = useState<string | null>(null);
 
   // Delete confirmation state
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [eventToDelete, setEventToDelete] = useState<Event | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [timeMarks, setTimeMarks] = useState<Array<{ position: number; date: Date; label: string; isMainMark: boolean }>>([]);
 
   useEffect(() => {
     setIsClient(true);
   }, []);
+
+  // Calculate available height for timeline content - ONE TIME ONLY on mount
+  useEffect(() => {
+    if (!mapReady || !containerRef.current || !headerRef.current) return;
+
+    const containerHeight = containerRef.current.clientHeight;
+    const headerHeight = headerRef.current.clientHeight;
+    const available = containerHeight - headerHeight;
+
+    clientLog('Timeline viewport height measured (one-time):', {
+      containerHeight,
+      headerHeight,
+      availableHeight: available
+    });
+
+    setAvailableHeight(available);
+
+    // Window resize handler
+    const handleResize = () => {
+      if (containerRef.current && headerRef.current) {
+        const newContainerHeight = containerRef.current.clientHeight;
+        const newHeaderHeight = headerRef.current.clientHeight;
+        const newAvailable = newContainerHeight - newHeaderHeight;
+
+        clientLog('Window resize - updating viewport height:', {
+          oldHeight: available,
+          newHeight: newAvailable
+        });
+
+        setAvailableHeight(newAvailable);
+      }
+    };
+
+    window.addEventListener('resize', handleResize);
+
+    return () => {
+      window.removeEventListener('resize', handleResize);
+    };
+  }, [mapReady]);
+
+  // Adjust available height when header expands/collapses (e.g. link expansion)
+  useEffect(() => {
+    if (!expandRef.current) return;
+    console.log('********************************************\nEvent expand/collapse detected, recalculating available height...\n********************************************', expandRef.current.clientHeight);
+  }, [expandRef.current?.clientHeight]);
 
   useEffect(() => {
     if (timelineId && isClient) {
       fetchTimelineData();
     }
   }, [timelineId, isClient, refreshTrigger]);
+
+  // Generate time marks when events or zoom level change
+  useEffect(() => {
+    if (events.length > 0) {
+      const timeRange = getTimeRange();
+      setTimeMarks(generateTimeMarks(timeRange));
+    }
+  }, [events, zoomLevel]);
+
+  // Track visible events using Intersection Observer
+  useEffect(() => {
+    if (!timelineScrollRef.current || !onVisibleEventsChange || events.length === 0) return;
+
+    const visibleEventIds = new Set<string>();
+
+    // Create intersection observer
+    const observer = new IntersectionObserver(
+      (entries) => {
+        let hasChanges = false;
+
+        entries.forEach((entry) => {
+          const eventId = entry.target.getAttribute('data-event-id');
+          if (!eventId) return;
+
+          if (entry.isIntersecting) {
+            if (!visibleEventIds.has(eventId)) {
+              visibleEventIds.add(eventId);
+              hasChanges = true;
+            }
+          } else {
+            if (visibleEventIds.has(eventId)) {
+              visibleEventIds.delete(eventId);
+              hasChanges = true;
+            }
+          }
+        });
+
+        // Only notify if there were changes
+        if (hasChanges) {
+          onVisibleEventsChange(Array.from(visibleEventIds));
+        }
+      },
+      {
+        root: timelineScrollRef.current, // Use timeline container as root
+        threshold: 0.1, // Trigger when 10% of the event card is visible
+        rootMargin: '50px' // Add some margin for smoother updates
+      }
+    );
+
+    // Observe all event cards
+    const eventElements = timelineScrollRef.current.querySelectorAll('[data-event-id]');
+    eventElements.forEach((element) => {
+      observer.observe(element);
+    });
+
+    // Cleanup
+    return () => {
+      observer.disconnect();
+    };
+  }, [events, onVisibleEventsChange, zoomLevel, availableHeight]); // Re-run when events, zoom, or height changes
+
+  // Maintain center focus when zoom level changes
+  useEffect(() => {
+    if (!timelineScrollRef.current || prevZoomLevel === zoomLevel || availableHeight === 0) return;
+
+    const scrollContainer = timelineScrollRef.current;
+    const containerHeight = scrollContainer.clientHeight;
+    const scrollHeight = scrollContainer.scrollHeight;
+    const currentScrollTop = scrollContainer.scrollTop;
+
+    // Calculate current center position as percentage of timeline content
+    const currentCenterPercentage = scrollHeight > 0 ?
+      (currentScrollTop + containerHeight / 2) / scrollHeight : 0.5;
+
+    // After zoom change, maintain similar relative position
+    requestAnimationFrame(() => {
+      if (timelineScrollRef.current) {
+        const newScrollHeight = timelineScrollRef.current.scrollHeight;
+        const newContainerHeight = timelineScrollRef.current.clientHeight;
+        const targetScrollTop = (currentCenterPercentage * newScrollHeight) - newContainerHeight / 2;
+        const maxScroll = newScrollHeight - newContainerHeight;
+
+        timelineScrollRef.current.scrollTop = Math.max(0, Math.min(targetScrollTop, maxScroll));
+      }
+    });
+
+    setPrevZoomLevel(zoomLevel);
+  }, [zoomLevel, prevZoomLevel, availableHeight]);
 
   const fetchTimelineData = async () => {
     setLoading(true);
@@ -112,8 +269,9 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
         );
         setEvents(sortedEvents);
 
-        // Fetch attachments for each event
+        // Fetch attachments and links for each event
         const attachmentsMap: Record<string, Attachment[]> = {};
+        const linksMap: Record<string, Link[]> = {};
         for (const event of sortedEvents) {
           try {
             const attachResponse = await fetch(`/api/attachments?eventId=${event._id}`);
@@ -122,13 +280,24 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
               attachmentsMap[event._id] = attachments;
             }
           } catch (error) {
-            console.error(`Error fetching attachments for event ${event._id}:`, error);
+            clientLog(`Error fetching attachments for event ${event._id}:`, error);
+          }
+
+          try {
+            const linksResponse = await fetch(`/api/links?eventId=${event._id}`);
+            if (linksResponse.ok) {
+              const links = await linksResponse.json();
+              linksMap[event._id] = links;
+            }
+          } catch (error) {
+            clientLog(`Error fetching links for event ${event._id}:`, error);
           }
         }
         setEventAttachments(attachmentsMap);
+        setEventLinks(linksMap);
       }
     } catch (error) {
-      console.error('Error fetching timeline data:', error);
+      clientLog('Error fetching timeline data:', error);
     } finally {
       setLoading(false);
     }
@@ -146,7 +315,7 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
         setTimelineTitle(newTitle);
       }
     } catch (error) {
-      console.error('Error updating timeline title:', error);
+      clientLog('Error updating timeline title:', error);
     }
   };
 
@@ -171,6 +340,19 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
   const handleViewerClose = () => {
     setViewerOpen(false);
     setSelectedAttachment(null);
+  };
+
+  const toggleLinksExpanded = (eventId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setExpandedLinks(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(eventId)) {
+        newSet.delete(eventId);
+      } else {
+        newSet.add(eventId);
+      }
+      return newSet;
+    });
   };
 
   // URL validation helper
@@ -208,10 +390,11 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
 
       const data = await response.json();
       setParsedData(data.parsed);
+      setParsedUrl(data.url);
       setParsedDataDialog(true);
       setQuickAddUrl('');
     } catch (error) {
-      console.error('URL parsing error:', error);
+      clientLog('URL parsing error:', error);
       setParseError(error instanceof Error ? error.message : 'Failed to parse URL');
     } finally {
       setUrlParsing(false);
@@ -227,10 +410,10 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
 
       // Create events
       if (parsedData.events?.length > 0) {
-        console.log(`Creating ${parsedData.events.length} events:`, parsedData.events);
+        clientLog(`Creating ${parsedData.events.length} events:`, parsedData.events);
         for (let i = 0; i < parsedData.events.length; i++) {
           const eventData = parsedData.events[i];
-          console.log(`Creating event ${i + 1}/${parsedData.events.length}:`, eventData);
+          clientLog(`Creating event ${i + 1}/${parsedData.events.length}:`, eventData);
           try {
             const response = await fetch('/api/events', {
               method: 'POST',
@@ -245,19 +428,42 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
 
             if (response.ok) {
               const event = await response.json();
-              console.log(`Event ${i + 1} created successfully:`, event.title);
+              clientLog(`Event ${i + 1} created successfully:`, event.title);
               createdItems.push(`Event: ${event.title}`);
+
+              // Create link with the parsed URL if available
+              if (parsedUrl && event._id) {
+                try {
+                  const linkResponse = await fetch('/api/links', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      title: event.title,
+                      url: parsedUrl,
+                      eventId: event._id,
+                    }),
+                  });
+
+                  if (linkResponse.ok) {
+                    clientLog(`Link created for event: ${event.title}`);
+                  } else {
+                    clientLog(`Failed to create link for event: ${event.title}`);
+                  }
+                } catch (linkError) {
+                  clientLog(`Exception creating link for event ${event.title}:`, linkError);
+                }
+              }
             } else {
               const errorData = await response.json().catch(() => ({}));
-              console.error(`Failed to create event ${i + 1}:`, eventData, 'Error:', errorData);
+              clientLog(`Failed to create event ${i + 1}:`, eventData, 'Error:', errorData);
               // Continue with the next event instead of stopping
             }
           } catch (eventError) {
-            console.error(`Exception creating event ${i + 1}:`, eventData, 'Exception:', eventError);
+            clientLog(`Exception creating event ${i + 1}:`, eventData, 'Exception:', eventError);
             // Continue with the next event instead of stopping
           }
         }
-        console.log(`Finished creating events. Successfully created: ${createdItems.filter(item => item.startsWith('Event:')).length}/${parsedData.events.length}`);
+        clientLog(`Finished creating events. Successfully created: ${createdItems.filter(item => item.startsWith('Event:')).length}/${parsedData.events.length}`);
       }
 
       // Create entities
@@ -310,9 +516,10 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
         fetchTimelineData();
         setParsedDataDialog(false);
         setParsedData(null);
+        setParsedUrl(null);
       }
     } catch (error) {
-      console.error('Error creating items from parsed data:', error);
+      clientLog('Error creating items from parsed data:', error);
       setParseError('Failed to create items from parsed data');
     }
   };
@@ -337,10 +544,10 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
         setDeleteConfirmOpen(false);
         setEventToDelete(null);
       } else {
-        console.error('Failed to delete event');
+        clientLog('Failed to delete event');
       }
     } catch (error) {
-      console.error('Error deleting event:', error);
+      clientLog('Error deleting event:', error);
     } finally {
       setDeleting(false);
     }
@@ -408,8 +615,18 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
     return (relativeTime / timeRange.duration) * 100; // Return as percentage
   };
 
+  // Alternative: Evenly distribute events regardless of their actual timestamps
+  const getEventPositionEvenly = (eventIndex: number, totalEvents: number) => {
+    if (totalEvents <= 1) return 50; // Center single event
+    // Distribute events evenly with padding at top and bottom
+    const usableSpace = 90; // Use 90% of space, leaving 5% padding top/bottom
+    const startPadding = 5;
+    const spacing = usableSpace / (totalEvents - 1);
+    return startPadding + (eventIndex * spacing);
+  };
+
   const generateTimeMarks = (timeRange: ReturnType<typeof getTimeRange>) => {
-    const marks: Array<{ position: number; label: string; isMainMark: boolean }> = [];
+    const marks: Array<{ position: number; date: Date; label: string; isMainMark: boolean }> = [];
     const { duration, start, end } = timeRange;
 
     // Determine appropriate intervals for round dates
@@ -479,6 +696,7 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
       marks.push({
         position,
         label: formatMain(new Date(currentTime)),
+        date: new Date(currentTime),
         isMainMark: true
       });
       currentTime += adjustedMainInterval;
@@ -495,6 +713,7 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
         marks.push({
           position,
           label: formatSub(new Date(currentTime)),
+          date: new Date(currentTime),
           isMainMark: false
         });
       }
@@ -526,6 +745,7 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
           marks.push({
             position,
             label: formatMicro(new Date(currentTime)),
+            date: new Date(currentTime),
             isMainMark: false
           });
         }
@@ -546,6 +766,7 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
         sortedMarks.unshift({
           position: 0,
           label: formatMain(start),
+          date: start,
           isMainMark: false
         });
       }
@@ -555,10 +776,13 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
         sortedMarks.push({
           position: 100,
           label: formatMain(end),
+          date: end,
           isMainMark: false
         });
       }
     }
+
+    clientLog(`Generated ${sortedMarks.length} time marks for duration ${Math.round(duration / (1000 * 60))} minutes at zoom level ${zoomLevel}`, sortedMarks);
 
     // Return all marks (remove the artificial limit)
     return sortedMarks;
@@ -573,10 +797,28 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
     );
   }
 
+  // Don't render timeline content until map is ready
+  if (!mapReady) {
+    return (
+      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
+        <CircularProgress />
+      </Box>
+    );
+  }
+
   return (
-    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+    <Box
+      ref={containerRef}
+      sx={{
+        height: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden' // Prevent outer scroll, force inner scroll
+      }}
+      suppressHydrationWarning
+    >
       {/* Timeline Header */}
-      <Box sx={{ p: 2, borderBottom: 1, borderColor: 'divider' }}>
+      <Box ref={headerRef} sx={{ p: 2, borderBottom: 1, borderColor: 'divider' }}>
         {editingTitle ? (
           <TextField
             fullWidth
@@ -622,9 +864,15 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
             value={zoomLevel}
             onChange={(_, value) => setZoomLevel(value as number)}
             sx={{ flex: 1, mx: 1 }}
-            min={10}
-            max={100}
+            min={25}
+            max={200}
             size="small"
+            marks={[
+              { value: 25, label: '25%' },
+              { value: 50, label: '50%' },
+              { value: 100, label: '100%' },
+              { value: 200, label: '200%' }
+            ]}
           />
           <ZoomIn fontSize="small" />
           <Typography variant="caption" sx={{ ml: 1 }}>
@@ -679,11 +927,25 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
       <Box
         ref={timelineScrollRef}
         sx={{
-          flex: 1,
           overflow: 'auto',
+          overflowX: 'hidden', // Only allow vertical scroll
           position: 'relative',
           cursor: isDragging ? 'grabbing' : 'grab',
-          userSelect: isDragging ? 'none' : 'auto'
+          userSelect: isDragging ? 'none' : 'auto',
+          height: availableHeight > 0 ? `${availableHeight}px` : '100%', // Exact viewport height in pixels
+          '&::-webkit-scrollbar': {
+            width: '8px',
+          },
+          '&::-webkit-scrollbar-track': {
+            background: 'rgba(0,0,0,0.1)',
+          },
+          '&::-webkit-scrollbar-thumb': {
+            background: 'rgba(0,0,0,0.3)',
+            borderRadius: '4px',
+            '&:hover': {
+              background: 'rgba(0,0,0,0.5)',
+            },
+          },
         }}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
@@ -704,11 +966,51 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
           </Box>
         ) : (() => {
           const timeRange = getTimeRange();
-          const timeMarks = generateTimeMarks(timeRange);
-          const timelineHeight = Math.max(600, 1000 * (zoomLevel / 50));
+
+          // Timeline height calculation based on available viewport height and zoom level
+          // Scroll container is set to exactly availableHeight pixels
+          // At 100% zoom: timeline content = availableHeight (fills viewport, no scroll)
+          // At 200% zoom: timeline content = 2x availableHeight (double height, scrolls)
+          // At 50% zoom: timeline content = 0.5x availableHeight (compressed, no scroll)
+          const fallbackHeight = Math.max(1000, events.length * 300); // Fallback if viewport not measured yet
+
+          // Calculate additional height needed for expanded (selected) events
+          // Collapsed event: ~40px, Expanded event: fit-content with minimum
+          const collapsedEventHeight = 40;
+          const expandedEventHeight = 80; // Minimum to fit title, date, rating - will grow with content
+          const selectedEventCount = events.filter(e => isEventSelected(e._id)).length;
+          const unselectedEventCount = events.length - selectedEventCount;
+
+          // Total minimum height needed for all events stacked
+          const minHeightForEvents = (selectedEventCount * expandedEventHeight) +
+                                      (unselectedEventCount * collapsedEventHeight);
+
+          const baseTimelineHeight = availableHeight > 0
+            ? availableHeight * (zoomLevel / 100)
+            : fallbackHeight;
+
+          // Ensure timeline is tall enough to fit all events without overlap
+          const finalTimelineHeight = Math.max(baseTimelineHeight, minHeightForEvents);
+
+          clientLog('Timeline height calculation:', {
+            availableHeight,
+            zoomLevel,
+            baseHeight: baseTimelineHeight,
+            selectedEvents: selectedEventCount,
+            minHeightForEvents,
+            finalHeight: finalTimelineHeight,
+            eventsCount: events.length,
+            ratio: availableHeight > 0 ? (finalTimelineHeight / availableHeight).toFixed(2) + 'x viewport' : 'using fallback'
+          });
 
           return (
-            <Box sx={{ position: 'relative', height: timelineHeight, minHeight: '100%', px: 2 }}>
+            <Box sx={{
+              position: 'relative',
+              height: finalTimelineHeight,
+              px: 2,
+              py: 4, // Add vertical padding
+              minHeight: finalTimelineHeight // Ensure minimum height
+            }}>
               {/* Central Timeline Line */}
               <Box
                 sx={{
@@ -723,85 +1025,186 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
                 }}
               />
 
-              {/* Time Scale Marks */}
-              {timeMarks.map((mark, index) => {
-                const isMicroMark = mark.label === '·';
+              {/* Time marks and events with shared position calculations */}
+              {(() => {
+                // Calculate all event positions and bounds
+                const eventData = events.map((event, index) => {
+                  const startTemporalPosition = getEventPosition(event.startDateTime, timeRange);
+                  const endDateTime = event.endDateTime || event.startDateTime;
+                  const endTemporalPosition = getEventPosition(endDateTime, timeRange);
+
+                  const centeringFactor = Math.max(0.1, zoomLevel / 100);
+                  const startCenterOffset = (50 - startTemporalPosition) * (1 - centeringFactor);
+                  const adjustedStartPosition = startTemporalPosition + startCenterOffset;
+                  const eventStartPosition = Math.max(5, Math.min(95, adjustedStartPosition));
+
+                  const endCenterOffset = (50 - endTemporalPosition) * (1 - centeringFactor);
+                  const adjustedEndPosition = endTemporalPosition + endCenterOffset;
+                  const eventEndPosition = Math.max(5, Math.min(95, adjustedEndPosition));
+
+                  const isSelected = isEventSelected(event._id);
+                  const temporalHeightPercent = Math.abs(eventEndPosition - eventStartPosition);
+                  const temporalHeightPixels = (temporalHeightPercent / 100) * finalTimelineHeight;
+                  const minHeight = isSelected ? expandedEventHeight : collapsedEventHeight;
+                  const thisEventHeight = Math.max(minHeight, temporalHeightPixels);
+
+                  // For bounds calculation, use a more generous estimate for selected events
+                  // since they will expand to fit content
+                  const estimatedHeight = isSelected ? Math.max(thisEventHeight, 150) : thisEventHeight;
+
+                  return {
+                    event,
+                    index,
+                    eventStartPosition,
+                    eventEndPosition,
+                    thisEventHeight,
+                    estimatedHeight, // Used for bounds/overlap detection
+                    topInPixels: (eventStartPosition / 100) * finalTimelineHeight,
+                    isSelected,
+                    pixelOffset: 0 // Will be calculated next
+                  };
+                });
+
+                // Calculate pixel offsets for stacking
+                const eventBounds: Array<{ top: number; bottom: number }> = [];
+                eventData.forEach(data => {
+                  let pixelOffset = 0;
+                  for (const prevBound of eventBounds) {
+                    const thisTop = data.topInPixels + pixelOffset;
+                    if (thisTop < prevBound.bottom + 10) {
+                      pixelOffset = prevBound.bottom + 10 - data.topInPixels;
+                    }
+                  }
+                  data.pixelOffset = pixelOffset;
+                  const finalTop = data.topInPixels + pixelOffset;
+                  // Use estimatedHeight for bounds to account for fit-content expansion
+                  const finalBottom = finalTop + data.estimatedHeight;
+                  eventBounds.push({ top: finalTop, bottom: finalBottom });
+                });
+
+                // Render both time marks and events
                 return (
-                  <Box key={index}>
-                    {/* Scale mark */}
+                  <>
+                    {/* Time marks filtered to not overlap with events */}
+                    {timeMarks.map((mark, index) => {
+                      const isMicroMark = mark.label === '·';
+                      const markPositionPixels = (mark.position / 100) * finalTimelineHeight;
+
+                      // Check if this mark falls within any event bounds (with small buffer for safety)
+                      const buffer = 2; // 2px buffer to ensure marks at edges are also hidden
+                      const overlapsEvent = eventBounds.some(bounds =>
+                        markPositionPixels >= (bounds.top - buffer) && markPositionPixels <= (bounds.bottom + buffer)
+                      );
+
+                      // Skip rendering if mark overlaps with an event
+                      if (overlapsEvent) {
+                        return null;
+                      }
+
+                      return (
+                        <Box key={`mark-${index}`}>
+                          {/* Scale mark */}
+                          <Box
+                            sx={{
+                              position: 'absolute',
+                              left: mark.isMainMark ? 'calc(50% - 15px)' :
+                                     isMicroMark ? 'calc(50% - 2px)' : 'calc(50% - 10px)',
+                              top: `${mark.position}%`,
+                              width: mark.isMainMark ? 30 : isMicroMark ? 4 : 20,
+                              height: isMicroMark ? 2 : 2,
+                              backgroundColor: 'text.secondary',
+                              opacity: isMicroMark ? 0.4 : 1,
+                              zIndex: 2,
+                            }}
+                          />
+                          {/* Scale label */}
+                          {!isMicroMark && (
+                            <Typography
+                              variant={mark.isMainMark ? 'caption' : 'overline'}
+                              sx={{
+                                position: 'absolute',
+                                left: 'calc(50% + 20px)',
+                                top: `${mark.position}%`,
+                                transform: 'translateY(-50%)',
+                                color: 'text.secondary',
+                                fontSize: mark.isMainMark ? '0.75rem' : '0.65rem',
+                                fontWeight: mark.isMainMark ? 'medium' : 'normal',
+                                whiteSpace: 'nowrap',
+                                zIndex: 2,
+                              }}
+                            >
+                              {mark.label}
+                            </Typography>
+                          )}
+                        </Box>
+                      );
+                    })}
+
+                    {/* Events */}
+                    {eventData.map((data) => {
+                      const { event, index, eventStartPosition, eventEndPosition, thisEventHeight, pixelOffset, isSelected } = data;
+
+                  // Debug: Log event positioning
+                  clientLog(`Event ${index + 1}: "${event.title}" positioned at ${eventStartPosition.toFixed(1)}%-${eventEndPosition.toFixed(1)}%`, {
+                    startDateTime: event.startDateTime,
+                    endDateTime: event.endDateTime || event.startDateTime,
+                    startPosition: eventStartPosition,
+                    endPosition: eventEndPosition,
+                    duration: (event.endDateTime && event.endDateTime !== event.startDateTime) ? 'has duration' : 'instant',
+                    finalHeight: thisEventHeight.toFixed(0) + 'px',
+                    pixelOffset: pixelOffset,
+                    zoomLevel: zoomLevel
+                  });
+
+                  return (
                     <Box
+                      key={event._id}
                       sx={{
                         position: 'absolute',
-                        left: mark.isMainMark ? 'calc(50% - 15px)' :
-                               isMicroMark ? 'calc(50% - 2px)' : 'calc(50% - 10px)',
-                        top: `${mark.position}%`,
-                        width: mark.isMainMark ? 30 : isMicroMark ? 4 : 20,
-                        height: isMicroMark ? 2 : 2,
-                        backgroundColor: 'text.secondary',
-                        opacity: isMicroMark ? 0.4 : 1,
-                        zIndex: 2,
+                        top: `calc(${eventStartPosition}% + ${pixelOffset}px)`,
+                        left: 8,
+                        right: 8,
+                        minHeight: thisEventHeight, // Minimum height for temporal duration
+                        height: isSelected ? 'auto' : thisEventHeight, // Auto for selected, fixed for collapsed
+                        zIndex: 3,
+                        display: 'flex',
+                        alignItems: 'stretch',
                       }}
-                    />
-                    {/* Scale label */}
-                    {!isMicroMark && (
-                      <Typography
-                        variant={mark.isMainMark ? 'caption' : 'overline'}
-                        sx={{
-                          position: 'absolute',
-                          left: 'calc(50% + 20px)',
-                          top: `${mark.position}%`,
-                          transform: 'translateY(-50%)',
-                          color: 'text.secondary',
-                          fontSize: mark.isMainMark ? '0.75rem' : '0.65rem',
-                          fontWeight: mark.isMainMark ? 'medium' : 'normal',
-                          whiteSpace: 'nowrap',
-                          zIndex: 2,
-                        }}
-                      >
-                        {mark.label}
-                      </Typography>
-                    )}
-                  </Box>
-                );
-              })}
-
-              {/* Events */}
-              {events.map((event) => {
-                const eventPosition = getEventPosition(event.startDateTime, timeRange);
-                const isSelected = isEventSelected(event._id);
-
-                return (
-                  <Box
-                    key={event._id}
-                    sx={{
-                      position: 'absolute',
-                      top: `${eventPosition}%`,
-                      left: 8,
-                      right: 8,
-                      transform: 'translateY(-50%)',
-                      zIndex: 3,
-                      display: 'flex',
-                      alignItems: 'center',
-                    }}
-                  >
+                    >
                     {/* Event card */}
                     <Card
                       data-event-id={event._id}
                       sx={{
                         width: '100%',
+                        height: isSelected ? 'auto' : '100%', // Auto height for selected events
+                        minHeight: isSelected ? thisEventHeight : undefined, // Ensure temporal coverage
                         cursor: 'pointer',
                         border: isSelected ? '2px solid' : '1px solid',
                         borderColor: isSelected ? 'primary.main' : 'divider',
                         '&:hover': { elevation: 2 },
                         backgroundColor: isSelected ? 'primary.50' : 'background.paper',
+                        display: 'flex',
+                        flexDirection: 'column',
                       }}
                       onClick={(e) => handleEventClick(event._id, e.shiftKey)}
                     >
-                      <CardContent sx={{ py: isSelected ? 1 : 0.25, px: 2, transition: 'all 0.2s ease-in-out' }}>
+                      <CardContent sx={{
+                        py: 1.5,
+                        px: 2,
+                        height: isSelected ? 'auto' : '100%', // Auto for selected, fill for collapsed
+                        display: 'flex',
+                        flexDirection: 'column',
+                        justifyContent: isSelected ? 'flex-start' : 'center',
+                        overflow: isSelected ? 'visible' : 'hidden', // Allow content to show when expanded
+                        transition: 'all 0.2s ease-in-out',
+                        '&:last-child': {
+                          pb: 1.5
+                        }
+                      }}>
                         {isSelected ? (
                           <>
                             {/* Expanded view: title and controls row */}
-                            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 1 }}>
+                            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 1, height: "fit-content" }}>
                               <Typography variant="h6" sx={{ flex: 1, fontSize: '0.95rem', fontWeight: 'bold' }} className="event-name">
                                 {event.title}
                               </Typography>
@@ -821,19 +1224,6 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
                                 >
                                   <Edit fontSize="small" />
                                 </IconButton>
-                                {onStartConnection && (
-                                  <IconButton
-                                    size="small"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      onStartConnection('event', event._id, event.title);
-                                    }}
-                                    sx={{ opacity: 0.7, '&:hover': { opacity: 1, color: 'warning.main' } }}
-                                    title="Create connection"
-                                  >
-                                    <Bolt fontSize="small" />
-                                  </IconButton>
-                                )}
                                 <IconButton
                                   size="small"
                                   onClick={(e) => {
@@ -890,60 +1280,95 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
                             {/* Attachment thumbnails */}
                             {eventAttachments[event._id] && eventAttachments[event._id].length > 0 && (
                               <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mt: 1 }}>
-                                {eventAttachments[event._id].slice(0, 3).map((attachment) => (
-                                  <Box
-                                    key={attachment._id}
-                                    sx={{
-                                      width: 24,
-                                      height: 24,
-                                      borderRadius: 0.5,
-                                      overflow: 'hidden',
-                                      border: '1px solid',
-                                      borderColor: 'divider',
-                                      cursor: 'pointer',
-                                      '&:hover': { opacity: 0.8 },
-                                    }}
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      handleAttachmentClick(attachment);
-                                    }}
-                                  >
-                                    {attachment.mimeType.startsWith('image/') ? (
-                                      <Box
-                                        component="img"
-                                        src={attachment.url}
-                                        alt={attachment.originalName}
-                                        sx={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                                      />
-                                    ) : (
-                                      <Box sx={{
-                                        width: '100%',
-                                        height: '100%',
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        justifyContent: 'center',
-                                        backgroundColor: 'grey.100',
-                                        fontSize: '10px'
-                                      }}>
-                                        {attachment.mimeType.startsWith('video/') ? '🎥' :
-                                         attachment.mimeType.startsWith('audio/') ? '🎵' : '📄'}
-                                      </Box>
-                                    )}
-                                  </Box>
+                                {eventAttachments[event._id].map((attachment) => (
+                                  <Tooltip key={attachment._id} title={attachment.originalName} arrow>
+                                    <Box
+                                      sx={{
+                                        width: 24,
+                                        height: 24,
+                                        borderRadius: 0.5,
+                                        overflow: 'hidden',
+                                        border: '1px solid',
+                                        borderColor: 'divider',
+                                        cursor: 'pointer',
+                                        '&:hover': { opacity: 0.8 },
+                                      }}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleAttachmentClick(attachment);
+                                      }}
+                                    >
+                                      {attachment.mimeType.startsWith('image/') ? (
+                                        <Box
+                                          component="img"
+                                          src={attachment.url}
+                                          alt={attachment.originalName}
+                                          sx={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                                        />
+                                      ) : (
+                                        <Box sx={{
+                                          width: '100%',
+                                          height: '100%',
+                                          display: 'flex',
+                                          alignItems: 'center',
+                                          justifyContent: 'center',
+                                          backgroundColor: 'grey.100',
+                                          fontSize: '10px'
+                                        }}>
+                                          {attachment.mimeType.startsWith('video/') ? '🎥' :
+                                           attachment.mimeType.startsWith('audio/') ? '🎵' : '📄'}
+                                        </Box>
+                                      )}
+                                    </Box>
+                                  </Tooltip>
                                 ))}
-                                {eventAttachments[event._id].length > 3 && (
-                                  <Box sx={{
-                                    width: 24,
-                                    height: 24,
-                                    borderRadius: 0.5,
+                              </Box>
+                            )}
+
+                            {/* Links section */}
+                            {eventLinks[event._id] && eventLinks[event._id].length > 0 && (
+                              <Box sx={{ mt: 1 }}>
+                                <Box
+                                  sx={{
                                     display: 'flex',
                                     alignItems: 'center',
-                                    justifyContent: 'center',
-                                    backgroundColor: 'grey.200',
-                                    fontSize: '8px',
-                                    fontWeight: 'bold',
-                                  }}>
-                                    +{eventAttachments[event._id].length - 3}
+                                    cursor: 'pointer',
+                                    userSelect: 'none',
+                                    '&:hover': { opacity: 0.7 },
+                                  }}
+                                  onClick={(e) => toggleLinksExpanded(event._id, e)}
+                                >
+                                  <Typography variant="caption" sx={{ fontSize: '0.75rem', fontWeight: 'medium' }}>
+                                    Links
+                                  </Typography>
+                                  {expandedLinks.has(event._id) ? (
+                                    <ExpandLess sx={{ fontSize: '0.9rem', ml: 0.5 }} />
+                                  ) : (
+                                    <ExpandMore sx={{ fontSize: '0.9rem', ml: 0.5 }} />
+                                  )}
+                                </Box>
+                                {expandedLinks.has(event._id) && (
+                                  <Box sx={{ mt: 0.5, display: 'flex', flexDirection: 'column', gap: 0.25 }}>
+                                    {eventLinks[event._id].map((link) => (
+                                      <Typography
+                                        key={link._id}
+                                        component="a"
+                                        href={link.url}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        sx={{
+                                          fontSize: '0.7rem',
+                                          color: 'primary.main',
+                                          textDecoration: 'none',
+                                          '&:hover': {
+                                            textDecoration: 'underline',
+                                          },
+                                        }}
+                                        onClick={(e) => e.stopPropagation()}
+                                      >
+                                        {link.title}
+                                      </Typography>
+                                    ))}
                                   </Box>
                                 )}
                               </Box>
@@ -954,7 +1379,10 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
                     </Card>
                   </Box>
                 );
-              })}
+                    })}
+                  </>
+                );
+              })()}
             </Box>
           );
         })()}
@@ -973,6 +1401,7 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
         onClose={() => {
           setParsedDataDialog(false);
           setParsedData(null);
+          setParsedUrl(null);
         }}
         maxWidth="md"
         fullWidth
@@ -1099,6 +1528,7 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
             onClick={() => {
               setParsedDataDialog(false);
               setParsedData(null);
+              setParsedUrl(null);
             }}
           >
             Cancel

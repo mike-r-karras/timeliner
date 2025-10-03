@@ -54,6 +54,8 @@ export async function POST(request: NextRequest) {
       type,
       sourceId,
       targetId,
+      sourceModel,
+      targetModel,
       relationshipType,
       tags,
       description,
@@ -62,9 +64,9 @@ export async function POST(request: NextRequest) {
       timelineId,
     } = await request.json();
 
-    if (!type || !sourceId || !targetId || !relationshipType?.trim() || !timelineId) {
+    if (!type || !sourceId || !targetId || !sourceModel || !targetModel || !relationshipType?.trim() || !timelineId) {
       return NextResponse.json(
-        { error: 'Type, source ID, target ID, relationship type, and timeline ID are required' },
+        { error: 'Type, source ID, target ID, source model, target model, relationship type, and timeline ID are required' },
         { status: 400 }
       );
     }
@@ -92,10 +94,23 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Connection already exists' }, { status: 409 });
     }
 
+    console.log('Creating connection with data:', {
+      type,
+      sourceId,
+      targetId,
+      sourceModel,
+      targetModel,
+      relationshipType,
+      timelineId,
+      createdBy: session.user.id,
+    });
+
     const connection = await Connection.create({
       type,
       sourceId,
       targetId,
+      sourceModel,
+      targetModel,
       relationshipType: relationshipType.trim(),
       tags: tags || [],
       description: description?.trim(),
@@ -105,14 +120,27 @@ export async function POST(request: NextRequest) {
       createdBy: session.user.id,
     });
 
+    console.log('Connection created successfully:', connection._id);
+
     const populatedConnection = await Connection.findById(connection._id)
       .populate('sourceId')
       .populate('targetId');
 
     return NextResponse.json(populatedConnection, { status: 201 });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error creating connection:', error);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+    console.error('Error details:', {
+      name: error.name,
+      message: error.message,
+      stack: error.stack,
+    });
+
+    // Return more detailed error in development
+    const errorMessage = process.env.NODE_ENV === 'development'
+      ? `${error.name}: ${error.message}`
+      : 'Internal server error';
+
+    return NextResponse.json({ error: errorMessage }, { status: 500 });
   }
 }
 

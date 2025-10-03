@@ -21,7 +21,7 @@ import {
   Divider,
   Rating,
 } from '@mui/material';
-import { AttachFile, Delete, Visibility, Add } from '@mui/icons-material';
+import { AttachFile, Delete, Visibility, Add, Link as LinkIcon, Edit } from '@mui/icons-material';
 import AttachmentViewer from './AttachmentViewer';
 import LocationModal from './LocationModal';
 
@@ -40,6 +40,18 @@ interface Attachment {
   size: number;
   url: string;
   type: 'photo' | 'video' | 'audio' | 'document' | 'other';
+  caption?: string;
+  altText?: string;
+  creator?: string;
+  creditLine?: string;
+  copyright?: string;
+  date?: string;
+}
+
+interface Link {
+  _id: string;
+  title: string;
+  url: string;
 }
 
 interface EntityModalProps {
@@ -79,12 +91,31 @@ export default function EntityModal({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [links, setLinks] = useState<Link[]>([]);
   const [uploading, setUploading] = useState(false);
   const [viewerOpen, setViewerOpen] = useState(false);
   const [selectedAttachment, setSelectedAttachment] = useState<Attachment | null>(null);
   const [locations, setLocations] = useState<Location[]>([]);
   const [locationModalOpen, setLocationModalOpen] = useState(false);
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [metadataDialogOpen, setMetadataDialogOpen] = useState(false);
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [editingAttachmentId, setEditingAttachmentId] = useState<string | null>(null);
+  const [fileMetadata, setFileMetadata] = useState({
+    caption: '',
+    altText: '',
+    creator: '',
+    creditLine: '',
+    copyright: '',
+    date: '',
+  });
+  const [linkDialogOpen, setLinkDialogOpen] = useState(false);
+  const [editingLinkId, setEditingLinkId] = useState<string | null>(null);
+  const [linkData, setLinkData] = useState({
+    title: '',
+    url: '',
+  });
+  const [savingLink, setSavingLink] = useState(false);
 
   useEffect(() => {
     if (open) {
@@ -107,6 +138,7 @@ export default function EntityModal({
     });
     setError('');
     setAttachments([]);
+    setLinks([]);
     setPendingFiles([]);
   };
 
@@ -126,9 +158,10 @@ export default function EntityModal({
     if (!entityId) return;
 
     try {
-      const [entityResponse, attachmentsResponse] = await Promise.all([
+      const [entityResponse, attachmentsResponse, linksResponse] = await Promise.all([
         fetch(`/api/entities/${entityId}`),
-        fetch(`/api/attachments?entityId=${entityId}`)
+        fetch(`/api/attachments?entityId=${entityId}`),
+        fetch(`/api/links?entityId=${entityId}`)
       ]);
 
       if (entityResponse.ok) {
@@ -145,6 +178,11 @@ export default function EntityModal({
       if (attachmentsResponse.ok) {
         const attachmentData = await attachmentsResponse.json();
         setAttachments(attachmentData);
+      }
+
+      if (linksResponse.ok) {
+        const linksData = await linksResponse.json();
+        setLinks(linksData);
       }
     } catch (error) {
       console.error('Error fetching entity:', error);
@@ -226,22 +264,78 @@ export default function EntityModal({
     }
   };
 
-  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
     if (!files || files.length === 0) return;
 
-    const fileArray = Array.from(files);
+    // Handle one file at a time with metadata dialog
+    const file = files[0];
+    setPendingFile(file);
+    setFileMetadata({
+      caption: '',
+      altText: '',
+      creator: '',
+      creditLine: '',
+      copyright: '',
+      date: '',
+    });
+    setMetadataDialogOpen(true);
 
-    if (entityId) {
-      // Entity exists, upload immediately
+    // Clear the input
+    event.target.value = '';
+  };
+
+  const handleMetadataConfirm = async () => {
+    if (editingAttachmentId) {
+      // Update existing attachment metadata
       setUploading(true);
-      const uploadedAttachments: Attachment[] = [];
 
       try {
-        for (const file of fileArray) {
+        const response = await fetch(`/api/attachments/${editingAttachmentId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            caption: fileMetadata.caption,
+            altText: fileMetadata.altText,
+            creator: fileMetadata.creator,
+            creditLine: fileMetadata.creditLine,
+            copyright: fileMetadata.copyright,
+            date: fileMetadata.date,
+          }),
+        });
+
+        if (response.ok) {
+          const result = await response.json();
+          setAttachments(prev => prev.map(att =>
+            att._id === editingAttachmentId ? result.attachment : att
+          ));
+          setMetadataDialogOpen(false);
+          setEditingAttachmentId(null);
+        } else {
+          console.error('Failed to update attachment metadata');
+          setError('Failed to update attachment metadata');
+        }
+      } catch (error) {
+        console.error('Error updating attachment metadata:', error);
+        setError('Error updating attachment metadata');
+      } finally {
+        setUploading(false);
+      }
+    } else if (pendingFile) {
+      if (entityId) {
+        // Entity exists, upload immediately with metadata
+        setUploading(true);
+
+        try {
           const formData = new FormData();
-          formData.append('file', file);
+          formData.append('file', pendingFile);
           formData.append('entityId', entityId);
+          formData.append('caption', fileMetadata.caption);
+          formData.append('altText', fileMetadata.altText);
+          formData.append('creator', fileMetadata.creator);
+          formData.append('creditLine', fileMetadata.creditLine);
+          formData.append('copyright', fileMetadata.copyright);
+          formData.append('date', fileMetadata.date);
 
           const response = await fetch('/api/attachments/upload', {
             method: 'POST',
@@ -250,37 +344,63 @@ export default function EntityModal({
 
           if (response.ok) {
             const result = await response.json();
-            uploadedAttachments.push(result.attachment);
+            setAttachments(prev => [...prev, result.attachment]);
+            setMetadataDialogOpen(false);
+            setPendingFile(null);
           }
+        } catch (error) {
+          console.error('Upload failed:', error);
+          setError('Failed to upload file');
+        } finally {
+          setUploading(false);
         }
+      } else {
+        // New entity, store file for later upload
+        setPendingFiles(prev => [...prev, pendingFile]);
 
-        setAttachments(prev => [...prev, ...uploadedAttachments]);
-      } catch (error) {
-        console.error('Upload failed:', error);
-        setError('Failed to upload files');
-      } finally {
-        setUploading(false);
+        // Create preview object for pending file
+        const previewAttachment = {
+          _id: `pending-${Date.now()}-${Math.random()}`, // Temporary ID
+          filename: pendingFile.name,
+          originalName: pendingFile.name,
+          mimeType: pendingFile.type,
+          size: pendingFile.size,
+          url: '', // No URL yet since it's not uploaded
+          type: getFileType(pendingFile.type),
+        };
+
+        setAttachments(prev => [...prev, previewAttachment]);
+        setMetadataDialogOpen(false);
+        setPendingFile(null);
       }
-    } else {
-      // New entity, store files for later upload
-      setPendingFiles(prev => [...prev, ...fileArray]);
-
-      // Create preview objects for pending files
-      const previewAttachments = fileArray.map(file => ({
-        _id: `pending-${Date.now()}-${Math.random()}`, // Temporary ID
-        filename: file.name,
-        originalName: file.name,
-        mimeType: file.type,
-        size: file.size,
-        url: '', // No URL yet since it's not uploaded
-        type: getFileType(file.type),
-      }));
-
-      setAttachments(prev => [...prev, ...previewAttachments]);
     }
+  };
 
-    // Clear the input
-    event.target.value = '';
+  const handleMetadataCancel = () => {
+    setMetadataDialogOpen(false);
+    setPendingFile(null);
+    setEditingAttachmentId(null);
+    setFileMetadata({
+      caption: '',
+      altText: '',
+      creator: '',
+      creditLine: '',
+      copyright: '',
+      date: '',
+    });
+  };
+
+  const handleEditAttachmentMetadata = (attachment: Attachment) => {
+    setEditingAttachmentId(attachment._id);
+    setFileMetadata({
+      caption: attachment.caption || '',
+      altText: attachment.altText || '',
+      creator: attachment.creator || '',
+      creditLine: attachment.creditLine || '',
+      copyright: attachment.copyright || '',
+      date: attachment.date ? attachment.date.split('T')[0] : '',
+    });
+    setMetadataDialogOpen(true);
   };
 
   const handleAttachmentDelete = async (attachmentId: string) => {
@@ -315,13 +435,99 @@ export default function EntityModal({
       return;
     }
 
-    setSelectedAttachment(attachment);
-    setViewerOpen(true);
+    // In edit mode, open metadata editor; otherwise open viewer
+    if (entityId) {
+      handleEditAttachmentMetadata(attachment);
+    } else {
+      setSelectedAttachment(attachment);
+      setViewerOpen(true);
+    }
   };
 
   const handleViewerClose = () => {
     setViewerOpen(false);
     setSelectedAttachment(null);
+  };
+
+  const handleAddLink = () => {
+    setEditingLinkId(null);
+    setLinkData({ title: '', url: '' });
+    setLinkDialogOpen(true);
+  };
+
+  const handleEditLink = (link: Link) => {
+    setEditingLinkId(link._id);
+    setLinkData({ title: link.title, url: link.url });
+    setLinkDialogOpen(true);
+  };
+
+  const handleLinkDialogClose = () => {
+    setLinkDialogOpen(false);
+    setEditingLinkId(null);
+    setLinkData({ title: '', url: '' });
+  };
+
+  const handleSaveLink = async () => {
+    if (!linkData.title.trim() || !linkData.url.trim() || !entityId) return;
+
+    setSavingLink(true);
+
+    try {
+      if (editingLinkId) {
+        // Update existing link
+        const response = await fetch(`/api/links/${editingLinkId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title: linkData.title.trim(),
+            url: linkData.url.trim(),
+          }),
+        });
+
+        if (response.ok) {
+          const result = await response.json();
+          setLinks(prev => prev.map(link =>
+            link._id === editingLinkId ? result.link : link
+          ));
+          handleLinkDialogClose();
+        }
+      } else {
+        // Create new link
+        const response = await fetch('/api/links', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title: linkData.title.trim(),
+            url: linkData.url.trim(),
+            entityId,
+          }),
+        });
+
+        if (response.ok) {
+          const result = await response.json();
+          setLinks(prev => [...prev, result.link]);
+          handleLinkDialogClose();
+        }
+      }
+    } catch (error) {
+      console.error('Error saving link:', error);
+    } finally {
+      setSavingLink(false);
+    }
+  };
+
+  const handleDeleteLink = async (linkId: string) => {
+    try {
+      const response = await fetch(`/api/links/${linkId}`, {
+        method: 'DELETE',
+      });
+
+      if (response.ok) {
+        setLinks(prev => prev.filter(link => link._id !== linkId));
+      }
+    } catch (error) {
+      console.error('Error deleting link:', error);
+    }
   };
 
   const handleAddLocation = () => {
@@ -456,7 +662,6 @@ export default function EntityModal({
                   {uploading && <CircularProgress size={20} />}
                   <input
                     type="file"
-                    multiple
                     onChange={handleFileUpload}
                     style={{ display: 'none' }}
                     id="entity-file-upload"
@@ -533,6 +738,106 @@ export default function EntityModal({
                 </Typography>
               )}
             </Box>
+
+            <Divider sx={{ my: 2 }} />
+
+            {/* Links Section */}
+            <Box>
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
+                <Typography variant="h6">Links</Typography>
+                <Button
+                  variant="outlined"
+                  onClick={handleAddLink}
+                  startIcon={<Add />}
+                  size="small"
+                  disabled={!entityId}
+                >
+                  Add Link
+                </Button>
+              </Box>
+
+              {!entityId && (
+                <Alert severity="info" sx={{ mb: 2 }}>
+                  Save the entity first to add links.
+                </Alert>
+              )}
+
+              {links.length > 0 && (
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                  {links.map((link) => (
+                    <Box
+                      key={link._id}
+                      sx={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        p: 1,
+                        border: '1px solid',
+                        borderColor: 'divider',
+                        borderRadius: 1,
+                        gap: 1,
+                      }}
+                    >
+                      <Box sx={{
+                        width: 40,
+                        height: 40,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        backgroundColor: 'primary.light',
+                        borderRadius: 1,
+                      }}>
+                        <LinkIcon sx={{ color: 'primary.contrastText' }} />
+                      </Box>
+
+                      <Box sx={{ flex: 1, minWidth: 0 }}>
+                        <Typography variant="body2" sx={{ fontWeight: 'medium' }} noWrap>
+                          {link.title}
+                        </Typography>
+                        <Typography
+                          variant="caption"
+                          color="primary"
+                          component="a"
+                          href={link.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          sx={{
+                            textDecoration: 'none',
+                            '&:hover': {
+                              textDecoration: 'underline',
+                            },
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {link.url}
+                        </Typography>
+                      </Box>
+
+                      <Box sx={{ display: 'flex', gap: 0.5 }}>
+                        <IconButton
+                          size="small"
+                          onClick={() => handleEditLink(link)}
+                        >
+                          <Edit fontSize="small" />
+                        </IconButton>
+                        <IconButton
+                          size="small"
+                          onClick={() => handleDeleteLink(link._id)}
+                          color="error"
+                        >
+                          <Delete fontSize="small" />
+                        </IconButton>
+                      </Box>
+                    </Box>
+                  ))}
+                </Box>
+              )}
+
+              {links.length === 0 && entityId && (
+                <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center', py: 2 }}>
+                  No links yet. Click "Add Link" to add relevant URLs.
+                </Typography>
+              )}
+            </Box>
           </Box>
         </DialogContent>
 
@@ -560,6 +865,141 @@ export default function EntityModal({
         timelineId={timelineId}
         onLocationCreated={handleLocationCreated}
       />
+
+      {/* Attachment Metadata Dialog */}
+      <Dialog
+        open={metadataDialogOpen}
+        onClose={handleMetadataCancel}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>
+          {editingAttachmentId ? 'Edit File Metadata' : 'Add File Metadata'}
+          {pendingFile && (
+            <Typography variant="caption" display="block" color="text.secondary">
+              {pendingFile.name}
+            </Typography>
+          )}
+          {editingAttachmentId && !pendingFile && (
+            <Typography variant="caption" display="block" color="text.secondary">
+              {attachments.find(a => a._id === editingAttachmentId)?.originalName}
+            </Typography>
+          )}
+        </DialogTitle>
+        <DialogContent>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
+            <TextField
+              label="Caption"
+              value={fileMetadata.caption}
+              onChange={(e) => setFileMetadata(prev => ({ ...prev, caption: e.target.value }))}
+              multiline
+              rows={3}
+              fullWidth
+              placeholder="Describe this file..."
+            />
+
+            <TextField
+              label="Alt Text"
+              value={fileMetadata.altText}
+              onChange={(e) => setFileMetadata(prev => ({ ...prev, altText: e.target.value }))}
+              fullWidth
+              placeholder="Alternative text for accessibility..."
+            />
+
+            <TextField
+              label="Creator / Byline"
+              value={fileMetadata.creator}
+              onChange={(e) => setFileMetadata(prev => ({ ...prev, creator: e.target.value }))}
+              fullWidth
+              placeholder="Who created this file..."
+            />
+
+            <TextField
+              label="Credit Line (Provider)"
+              value={fileMetadata.creditLine}
+              onChange={(e) => setFileMetadata(prev => ({ ...prev, creditLine: e.target.value }))}
+              fullWidth
+              placeholder="Source or provider..."
+            />
+
+            <TextField
+              label="Copyright Notice"
+              value={fileMetadata.copyright}
+              onChange={(e) => setFileMetadata(prev => ({ ...prev, copyright: e.target.value }))}
+              fullWidth
+              placeholder="Copyright information..."
+            />
+
+            <TextField
+              label="Date"
+              type="date"
+              value={fileMetadata.date}
+              onChange={(e) => setFileMetadata(prev => ({ ...prev, date: e.target.value }))}
+              fullWidth
+              InputLabelProps={{ shrink: true }}
+            />
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleMetadataCancel} disabled={uploading}>
+            Cancel
+          </Button>
+          <Button
+            onClick={handleMetadataConfirm}
+            variant="contained"
+            disabled={uploading}
+            startIcon={uploading ? <CircularProgress size={16} /> : null}
+          >
+            {uploading ? (editingAttachmentId ? 'Saving...' : 'Uploading...') : (editingAttachmentId ? 'Save' : (entityId ? 'Upload' : 'Add'))}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Link Dialog */}
+      <Dialog
+        open={linkDialogOpen}
+        onClose={handleLinkDialogClose}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>
+          {editingLinkId ? 'Edit Link' : 'Add Link'}
+        </DialogTitle>
+        <DialogContent>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
+            <TextField
+              label="Title"
+              value={linkData.title}
+              onChange={(e) => setLinkData(prev => ({ ...prev, title: e.target.value }))}
+              fullWidth
+              required
+              placeholder="Link title..."
+            />
+
+            <TextField
+              label="URL"
+              value={linkData.url}
+              onChange={(e) => setLinkData(prev => ({ ...prev, url: e.target.value }))}
+              fullWidth
+              required
+              placeholder="https://..."
+            />
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleLinkDialogClose} disabled={savingLink}>
+            Cancel
+          </Button>
+          <Button
+            onClick={handleSaveLink}
+            variant="contained"
+            disabled={savingLink || !linkData.title.trim() || !linkData.url.trim()}
+            startIcon={savingLink ? <CircularProgress size={16} /> : null}
+          >
+            {savingLink ? 'Saving...' : editingLinkId ? 'Update' : 'Add'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Dialog>
   );
 }

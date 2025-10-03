@@ -23,7 +23,7 @@ import {
   CardMedia,
   CircularProgress,
 } from '@mui/material';
-import { CloudUpload, Delete, InsertDriveFile, Add } from '@mui/icons-material';
+import { CloudUpload, Delete, InsertDriveFile, Add, Link as LinkIcon, Edit } from '@mui/icons-material';
 import { DateTimePicker } from '@mui/x-date-pickers/DateTimePicker';
 import AttachmentViewer from './AttachmentViewer';
 import LocationModal from './LocationModal';
@@ -46,7 +46,19 @@ interface Attachment {
   url: string;
   type: 'photo' | 'video' | 'audio' | 'document' | 'other';
   eventId: string;
+  caption?: string;
+  altText?: string;
+  creator?: string;
+  creditLine?: string;
+  copyright?: string;
+  date?: string;
   createdAt: string;
+}
+
+interface Link {
+  _id: string;
+  title: string;
+  url: string;
 }
 
 interface EventModalProps {
@@ -75,12 +87,31 @@ export default function EventModal({
 
   const [locations, setLocations] = useState<Location[]>([]);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [links, setLinks] = useState<Link[]>([]);
   const [loading, setLoading] = useState(false);
   const [uploadingFile, setUploadingFile] = useState(false);
   const [error, setError] = useState('');
   const [viewerOpen, setViewerOpen] = useState(false);
   const [selectedAttachment, setSelectedAttachment] = useState<Attachment | null>(null);
   const [locationModalOpen, setLocationModalOpen] = useState(false);
+  const [metadataDialogOpen, setMetadataDialogOpen] = useState(false);
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [editingAttachmentId, setEditingAttachmentId] = useState<string | null>(null);
+  const [fileMetadata, setFileMetadata] = useState({
+    caption: '',
+    altText: '',
+    creator: '',
+    creditLine: '',
+    copyright: '',
+    date: '',
+  });
+  const [linkDialogOpen, setLinkDialogOpen] = useState(false);
+  const [editingLinkId, setEditingLinkId] = useState<string | null>(null);
+  const [linkData, setLinkData] = useState({
+    title: '',
+    url: '',
+  });
+  const [savingLink, setSavingLink] = useState(false);
 
   useEffect(() => {
     if (open) {
@@ -88,9 +119,11 @@ export default function EventModal({
       if (eventId) {
         fetchEvent();
         fetchAttachments();
+        fetchLinks();
       } else {
         resetForm();
         setAttachments([]);
+        setLinks([]);
       }
     }
   }, [open, eventId]);
@@ -106,6 +139,7 @@ export default function EventModal({
     });
     setError('');
     setAttachments([]);
+    setLinks([]);
   };
 
   const fetchLocations = async () => {
@@ -133,7 +167,7 @@ export default function EventModal({
           startDateTime: new Date(event.startDateTime),
           endDateTime: event.endDateTime ? new Date(event.endDateTime) : null,
           importance: event.importance,
-          locationId: event.locationId || '',
+          locationId: (typeof event.locationId === 'object' ? event.locationId?._id : event.locationId) || '',
         });
       }
     } catch (error) {
@@ -155,17 +189,87 @@ export default function EventModal({
     }
   };
 
-  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const files = event.target.files;
-    if (!files || !eventId) return;
-
-    setUploadingFile(true);
+  const fetchLinks = async () => {
+    if (!eventId) return;
 
     try {
-      for (const file of files) {
+      const response = await fetch(`/api/links?eventId=${eventId}`);
+      if (response.ok) {
+        const data = await response.json();
+        setLinks(data);
+      }
+    } catch (error) {
+      console.error('Error fetching links:', error);
+    }
+  };
+
+  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = event.target.files;
+    if (!files || files.length === 0 || !eventId) return;
+
+    // For now, handle one file at a time
+    const file = files[0];
+    setPendingFile(file);
+    setFileMetadata({
+      caption: '',
+      altText: '',
+      creator: '',
+      creditLine: '',
+      copyright: '',
+      date: '',
+    });
+    setMetadataDialogOpen(true);
+    event.target.value = ''; // Reset input
+  };
+
+  const handleMetadataConfirm = async () => {
+    if (editingAttachmentId) {
+      // Update existing attachment metadata
+      setUploadingFile(true);
+
+      try {
+        const response = await fetch(`/api/attachments/${editingAttachmentId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            caption: fileMetadata.caption,
+            altText: fileMetadata.altText,
+            creator: fileMetadata.creator,
+            creditLine: fileMetadata.creditLine,
+            copyright: fileMetadata.copyright,
+            date: fileMetadata.date,
+          }),
+        });
+
+        if (response.ok) {
+          const result = await response.json();
+          setAttachments(prev => prev.map(att =>
+            att._id === editingAttachmentId ? result.attachment : att
+          ));
+          setMetadataDialogOpen(false);
+          setEditingAttachmentId(null);
+        } else {
+          console.error('Failed to update attachment metadata');
+        }
+      } catch (error) {
+        console.error('Error updating attachment metadata:', error);
+      } finally {
+        setUploadingFile(false);
+      }
+    } else if (pendingFile && eventId) {
+      // Upload new file with metadata
+      setUploadingFile(true);
+
+      try {
         const formData = new FormData();
-        formData.append('file', file);
+        formData.append('file', pendingFile);
         formData.append('eventId', eventId);
+        formData.append('caption', fileMetadata.caption);
+        formData.append('altText', fileMetadata.altText);
+        formData.append('creator', fileMetadata.creator);
+        formData.append('creditLine', fileMetadata.creditLine);
+        formData.append('copyright', fileMetadata.copyright);
+        formData.append('date', fileMetadata.date);
 
         const response = await fetch('/api/attachments/upload', {
           method: 'POST',
@@ -175,16 +279,44 @@ export default function EventModal({
         if (response.ok) {
           const result = await response.json();
           setAttachments(prev => [...prev, result.attachment]);
+          setMetadataDialogOpen(false);
+          setPendingFile(null);
         } else {
-          console.error('Failed to upload file:', file.name);
+          console.error('Failed to upload file:', pendingFile.name);
         }
+      } catch (error) {
+        console.error('Error uploading file:', error);
+      } finally {
+        setUploadingFile(false);
       }
-    } catch (error) {
-      console.error('Error uploading files:', error);
-    } finally {
-      setUploadingFile(false);
-      event.target.value = ''; // Reset input
     }
+  };
+
+  const handleMetadataCancel = () => {
+    setMetadataDialogOpen(false);
+    setPendingFile(null);
+    setEditingAttachmentId(null);
+    setFileMetadata({
+      caption: '',
+      altText: '',
+      creator: '',
+      creditLine: '',
+      copyright: '',
+      date: '',
+    });
+  };
+
+  const handleEditAttachmentMetadata = (attachment: Attachment) => {
+    setEditingAttachmentId(attachment._id);
+    setFileMetadata({
+      caption: attachment.caption || '',
+      altText: attachment.altText || '',
+      creator: attachment.creator || '',
+      creditLine: attachment.creditLine || '',
+      copyright: attachment.copyright || '',
+      date: attachment.date ? attachment.date.split('T')[0] : '',
+    });
+    setMetadataDialogOpen(true);
   };
 
   const handleDeleteAttachment = async (attachmentId: string) => {
@@ -198,6 +330,87 @@ export default function EventModal({
       }
     } catch (error) {
       console.error('Error deleting attachment:', error);
+    }
+  };
+
+  const handleAddLink = () => {
+    setEditingLinkId(null);
+    setLinkData({ title: '', url: '' });
+    setLinkDialogOpen(true);
+  };
+
+  const handleEditLink = (link: Link) => {
+    setEditingLinkId(link._id);
+    setLinkData({ title: link.title, url: link.url });
+    setLinkDialogOpen(true);
+  };
+
+  const handleLinkDialogClose = () => {
+    setLinkDialogOpen(false);
+    setEditingLinkId(null);
+    setLinkData({ title: '', url: '' });
+  };
+
+  const handleSaveLink = async () => {
+    if (!linkData.title.trim() || !linkData.url.trim() || !eventId) return;
+
+    setSavingLink(true);
+
+    try {
+      if (editingLinkId) {
+        // Update existing link
+        const response = await fetch(`/api/links/${editingLinkId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title: linkData.title.trim(),
+            url: linkData.url.trim(),
+          }),
+        });
+
+        if (response.ok) {
+          const result = await response.json();
+          setLinks(prev => prev.map(link =>
+            link._id === editingLinkId ? result.link : link
+          ));
+          handleLinkDialogClose();
+        }
+      } else {
+        // Create new link
+        const response = await fetch('/api/links', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title: linkData.title.trim(),
+            url: linkData.url.trim(),
+            eventId,
+          }),
+        });
+
+        if (response.ok) {
+          const result = await response.json();
+          setLinks(prev => [...prev, result.link]);
+          handleLinkDialogClose();
+        }
+      }
+    } catch (error) {
+      console.error('Error saving link:', error);
+    } finally {
+      setSavingLink(false);
+    }
+  };
+
+  const handleDeleteLink = async (linkId: string) => {
+    try {
+      const response = await fetch(`/api/links/${linkId}`, {
+        method: 'DELETE',
+      });
+
+      if (response.ok) {
+        setLinks(prev => prev.filter(link => link._id !== linkId));
+      }
+    } catch (error) {
+      console.error('Error deleting link:', error);
     }
   };
 
@@ -223,8 +436,13 @@ export default function EventModal({
   };
 
   const handleAttachmentClick = (attachment: Attachment) => {
-    setSelectedAttachment(attachment);
-    setViewerOpen(true);
+    // In edit mode, open metadata editor; otherwise open viewer
+    if (eventId) {
+      handleEditAttachmentMetadata(attachment);
+    } else {
+      setSelectedAttachment(attachment);
+      setViewerOpen(true);
+    }
   };
 
   const handleViewerClose = () => {
@@ -398,7 +616,6 @@ export default function EventModal({
                       accept="*/*"
                       style={{ display: 'none' }}
                       id="file-upload"
-                      multiple
                       type="file"
                       onChange={handleFileUpload}
                       disabled={uploadingFile}
@@ -494,6 +711,103 @@ export default function EventModal({
                   </Box>
                 )}
               </Box>
+
+              {/* Links Section */}
+              <Box sx={{ mt: 2 }}>
+                <Typography variant="h6" gutterBottom>
+                  Links
+                </Typography>
+
+                {eventId && (
+                  <Box sx={{ mb: 2 }}>
+                    <Button
+                      variant="outlined"
+                      onClick={handleAddLink}
+                      startIcon={<Add />}
+                      fullWidth
+                    >
+                      Add Link
+                    </Button>
+                  </Box>
+                )}
+
+                {!eventId && (
+                  <Alert severity="info" sx={{ mb: 2 }}>
+                    Save the event first to add links.
+                  </Alert>
+                )}
+
+                {links.length > 0 && (
+                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                    {links.map((link) => (
+                      <Card
+                        key={link._id}
+                        sx={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          p: 1,
+                          '&:hover': {
+                            backgroundColor: 'action.hover',
+                          },
+                        }}
+                      >
+                        <Box sx={{ display: 'flex', alignItems: 'center', flex: 1, gap: 1 }}>
+                          <Box sx={{
+                            width: 40,
+                            height: 40,
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            backgroundColor: 'primary.light',
+                            borderRadius: 1,
+                          }}>
+                            <LinkIcon sx={{ color: 'primary.contrastText' }} />
+                          </Box>
+
+                          <Box sx={{ flex: 1, minWidth: 0 }}>
+                            <Typography variant="body2" sx={{ fontWeight: 'medium' }} noWrap>
+                              {link.title}
+                            </Typography>
+                            <Typography
+                              variant="caption"
+                              color="primary"
+                              component="a"
+                              href={link.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              sx={{
+                                textDecoration: 'none',
+                                '&:hover': {
+                                  textDecoration: 'underline',
+                                },
+                              }}
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              {link.url}
+                            </Typography>
+                          </Box>
+                        </Box>
+
+                        <IconButton
+                          size="small"
+                          onClick={() => handleEditLink(link)}
+                          sx={{ ml: 1 }}
+                        >
+                          <Edit fontSize="small" />
+                        </IconButton>
+
+                        <IconButton
+                          size="small"
+                          onClick={() => handleDeleteLink(link._id)}
+                          sx={{ ml: 0.5 }}
+                        >
+                          <Delete fontSize="small" />
+                        </IconButton>
+                      </Card>
+                    ))}
+                  </Box>
+                )}
+              </Box>
             </Box>
           </DialogContent>
 
@@ -520,6 +834,141 @@ export default function EventModal({
           onClose={() => setLocationModalOpen(false)}
           onLocationCreated={handleLocationCreated}
         />
+
+        {/* Attachment Metadata Dialog */}
+        <Dialog
+          open={metadataDialogOpen}
+          onClose={handleMetadataCancel}
+          maxWidth="sm"
+          fullWidth
+        >
+          <DialogTitle>
+            {editingAttachmentId ? 'Edit File Metadata' : 'Add File Metadata'}
+            {pendingFile && (
+              <Typography variant="caption" display="block" color="text.secondary">
+                {pendingFile.name}
+              </Typography>
+            )}
+            {editingAttachmentId && !pendingFile && (
+              <Typography variant="caption" display="block" color="text.secondary">
+                {attachments.find(a => a._id === editingAttachmentId)?.originalName}
+              </Typography>
+            )}
+          </DialogTitle>
+          <DialogContent>
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
+              <TextField
+                label="Caption"
+                value={fileMetadata.caption}
+                onChange={(e) => setFileMetadata(prev => ({ ...prev, caption: e.target.value }))}
+                multiline
+                rows={3}
+                fullWidth
+                placeholder="Describe this file..."
+              />
+
+              <TextField
+                label="Alt Text"
+                value={fileMetadata.altText}
+                onChange={(e) => setFileMetadata(prev => ({ ...prev, altText: e.target.value }))}
+                fullWidth
+                placeholder="Alternative text for accessibility..."
+              />
+
+              <TextField
+                label="Creator / Byline"
+                value={fileMetadata.creator}
+                onChange={(e) => setFileMetadata(prev => ({ ...prev, creator: e.target.value }))}
+                fullWidth
+                placeholder="Who created this file..."
+              />
+
+              <TextField
+                label="Credit Line (Provider)"
+                value={fileMetadata.creditLine}
+                onChange={(e) => setFileMetadata(prev => ({ ...prev, creditLine: e.target.value }))}
+                fullWidth
+                placeholder="Source or provider..."
+              />
+
+              <TextField
+                label="Copyright Notice"
+                value={fileMetadata.copyright}
+                onChange={(e) => setFileMetadata(prev => ({ ...prev, copyright: e.target.value }))}
+                fullWidth
+                placeholder="Copyright information..."
+              />
+
+              <TextField
+                label="Date"
+                type="date"
+                value={fileMetadata.date}
+                onChange={(e) => setFileMetadata(prev => ({ ...prev, date: e.target.value }))}
+                fullWidth
+                InputLabelProps={{ shrink: true }}
+              />
+            </Box>
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={handleMetadataCancel} disabled={uploadingFile}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleMetadataConfirm}
+              variant="contained"
+              disabled={uploadingFile}
+              startIcon={uploadingFile ? <CircularProgress size={16} /> : null}
+            >
+              {uploadingFile ? (editingAttachmentId ? 'Saving...' : 'Uploading...') : (editingAttachmentId ? 'Save' : 'Upload')}
+            </Button>
+          </DialogActions>
+        </Dialog>
+
+        {/* Link Dialog */}
+        <Dialog
+          open={linkDialogOpen}
+          onClose={handleLinkDialogClose}
+          maxWidth="sm"
+          fullWidth
+        >
+          <DialogTitle>
+            {editingLinkId ? 'Edit Link' : 'Add Link'}
+          </DialogTitle>
+          <DialogContent>
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
+              <TextField
+                label="Title"
+                value={linkData.title}
+                onChange={(e) => setLinkData(prev => ({ ...prev, title: e.target.value }))}
+                fullWidth
+                required
+                placeholder="Link title..."
+              />
+
+              <TextField
+                label="URL"
+                value={linkData.url}
+                onChange={(e) => setLinkData(prev => ({ ...prev, url: e.target.value }))}
+                fullWidth
+                required
+                placeholder="https://..."
+              />
+            </Box>
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={handleLinkDialogClose} disabled={savingLink}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleSaveLink}
+              variant="contained"
+              disabled={savingLink || !linkData.title.trim() || !linkData.url.trim()}
+              startIcon={savingLink ? <CircularProgress size={16} /> : null}
+            >
+              {savingLink ? 'Saving...' : editingLinkId ? 'Update' : 'Add'}
+            </Button>
+          </DialogActions>
+        </Dialog>
       </Dialog>
     </LocalizationProvider>
   );

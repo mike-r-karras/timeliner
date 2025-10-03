@@ -172,20 +172,24 @@ export default function ConnectionManager({
     try {
       const connectionType = `${pendingConnection.sourceType}-${pendingConnection.targetType}`;
 
+      const payload = {
+        type: connectionType,
+        sourceId: pendingConnection.sourceId,
+        targetId: pendingConnection.targetId,
+        relationshipType: connectionData.relationshipType,
+        tags: connectionData.tags,
+        description: connectionData.description,
+        startArrow: connectionData.startArrow,
+        endArrow: connectionData.endArrow,
+        timelineId,
+      };
+
+      console.log('Creating connection with payload:', payload);
+
       const response = await fetch('/api/connections', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          type: connectionType,
-          sourceId: pendingConnection.sourceId,
-          targetId: pendingConnection.targetId,
-          relationshipType: connectionData.relationshipType,
-          tags: connectionData.tags,
-          description: connectionData.description,
-          startArrow: connectionData.startArrow,
-          endArrow: connectionData.endArrow,
-          timelineId,
-        }),
+        body: JSON.stringify(payload),
       });
 
       if (response.ok) {
@@ -195,11 +199,36 @@ export default function ConnectionManager({
         setSnapTargetPosition(null);
         onConnectionComplete();
       } else {
-        const error = await response.json();
-        console.error('Error creating connection:', error);
+        let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+        try {
+          const errorData = await response.json();
+          if (errorData.error) {
+            errorMessage = errorData.error;
+          }
+        } catch (e) {
+          // Response doesn't contain valid JSON
+        }
+        console.error('Error creating connection:', errorMessage);
+        alert(`Failed to create connection: ${errorMessage}`);
       }
     } catch (error) {
       console.error('Error creating connection:', error);
+    }
+  };
+
+  const handleDeleteConnection = async (connectionId: string) => {
+    try {
+      const response = await fetch(`/api/connections/${connectionId}`, {
+        method: 'DELETE',
+      });
+
+      if (response.ok) {
+        await fetchConnections();
+      } else {
+        console.error('Failed to delete connection');
+      }
+    } catch (error) {
+      console.error('Error deleting connection:', error);
     }
   };
 
@@ -253,7 +282,101 @@ export default function ConnectionManager({
     };
   };
 
+  // Analyze connection routing to prevent overlapping lines
+  const analyzeConnectionRouting = (connections: Connection[]) => {
+    const routingGroups: Connection[][] = [];
+
+    // Group connections that would visually overlap
+    connections.forEach(connection => {
+      const points = getConnectionPoints(connection);
+      if (!points) return;
+
+      const connectionVerticalRange = {
+        min: Math.min(points.startY, points.endY) - 20, // 20px tolerance
+        max: Math.max(points.startY, points.endY) + 20,
+        startX: points.startX,
+        endX: points.endX,
+        connection
+      };
+
+      // Find existing group that this connection overlaps with
+      let foundGroup = false;
+      for (const group of routingGroups) {
+        const groupOverlaps = group.some(groupConnection => {
+          const groupPoints = getConnectionPoints(groupConnection);
+          if (!groupPoints) return false;
+
+          const groupVerticalRange = {
+            min: Math.min(groupPoints.startY, groupPoints.endY) - 20,
+            max: Math.max(groupPoints.startY, groupPoints.endY) + 20,
+          };
+
+          // Check for vertical overlap
+          const verticalOverlap = connectionVerticalRange.min <= groupVerticalRange.max &&
+                                 connectionVerticalRange.max >= groupVerticalRange.min;
+
+          // Check for horizontal path intersection (both are on same side of timeline)
+          const sameDirection = (connectionVerticalRange.startX < connectionVerticalRange.endX) ===
+                               (groupPoints.startX < groupPoints.endX);
+
+          return verticalOverlap && sameDirection;
+        });
+
+        if (groupOverlaps) {
+          group.push(connection);
+          foundGroup = true;
+          break;
+        }
+      }
+
+      // Create new group if no overlap found
+      if (!foundGroup) {
+        routingGroups.push([connection]);
+      }
+    });
+
+    // Calculate offset index for each connection
+    const connectionOffsets = new Map<string, number>();
+
+    routingGroups.forEach((group) => {
+      if (group.length <= 1) {
+        // Single connection, no offset needed
+        group.forEach(connection => {
+          connectionOffsets.set(connection._id, 0);
+        });
+        return;
+      }
+
+      // Sort connections in group for consistent ordering
+      group.sort((a, b) => {
+        const aPoints = getConnectionPoints(a);
+        const bPoints = getConnectionPoints(b);
+        if (!aPoints || !bPoints) return 0;
+
+        // Primary sort: vertical start position
+        if (Math.abs(aPoints.startY - bPoints.startY) > 10) {
+          return aPoints.startY - bPoints.startY;
+        }
+        // Secondary sort: horizontal start position
+        return aPoints.startX - bPoints.startX;
+      });
+
+      // Assign offset indices with center-balanced distribution
+      group.forEach((connection, index) => {
+        const totalConnections = group.length;
+        const centerOffset = Math.floor(totalConnections / 2);
+        const balancedIndex = index - centerOffset;
+        connectionOffsets.set(connection._id, balancedIndex);
+      });
+    });
+
+    return connectionOffsets;
+  };
+
   if (!showConnections && !isConnecting) return null;
+
+  // Calculate routing offsets for non-overlapping lines
+  const connectionOffsets = showConnections ? analyzeConnectionRouting(connections) : new Map();
 
   return (
     <>
@@ -266,7 +389,7 @@ export default function ConnectionManager({
           width: '100vw',
           height: '100vh',
           pointerEvents: 'none', // Critical: no click blocking
-          zIndex: 1,
+          zIndex: 0, // Lower than timeline content
         }}
       >
         {/* Existing connections */}
@@ -275,9 +398,33 @@ export default function ConnectionManager({
             const points = getConnectionPoints(connection);
             if (!points) return null;
 
+            const offsetIndex = connectionOffsets.get(connection._id) || 0;
+
+            // Extract names from populated sourceId and targetId
+            // Handle different possible data structures
+            let sourceName = 'Unknown Source';
+            let targetName = 'Unknown Target';
+
+            if (connection.sourceId) {
+              if (typeof connection.sourceId === 'object') {
+                sourceName = (connection.sourceId as any).name || (connection.sourceId as any).title || 'Unknown Source';
+              } else {
+                sourceName = 'Unpopulated Source';
+              }
+            }
+
+            if (connection.targetId) {
+              if (typeof connection.targetId === 'object') {
+                targetName = (connection.targetId as any).name || (connection.targetId as any).title || 'Unknown Target';
+              } else {
+                targetName = 'Unpopulated Target';
+              }
+            }
+
             return (
               <ConnectionLine
                 key={connection._id}
+                connectionId={connection._id}
                 startX={points.startX}
                 startY={points.startY}
                 endX={points.endX}
@@ -288,6 +435,10 @@ export default function ConnectionManager({
                 tags={connection.tags}
                 description={connection.description}
                 sourceType={connection.type.startsWith('entity') ? 'entity' : 'event'}
+                sourceName={sourceName}
+                targetName={targetName}
+                offsetIndex={offsetIndex}
+                onDelete={handleDeleteConnection}
               />
             );
           })}

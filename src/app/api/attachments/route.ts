@@ -48,6 +48,12 @@ export async function GET(request: NextRequest) {
         size: link.attachmentId.size,
         url: link.attachmentId.url,
         type: link.attachmentId.type,
+        caption: link.attachmentId.caption,
+        altText: link.attachmentId.altText,
+        creator: link.attachmentId.creator,
+        creditLine: link.attachmentId.creditLine,
+        copyright: link.attachmentId.copyright,
+        date: link.attachmentId.date,
       }));
 
       return NextResponse.json(attachments);
@@ -74,6 +80,12 @@ export async function GET(request: NextRequest) {
         size: link.attachmentId.size,
         url: link.attachmentId.url,
         type: link.attachmentId.type,
+        caption: link.attachmentId.caption,
+        altText: link.attachmentId.altText,
+        creator: link.attachmentId.creator,
+        creditLine: link.attachmentId.creditLine,
+        copyright: link.attachmentId.copyright,
+        date: link.attachmentId.date,
       }));
 
       return NextResponse.json(attachments);

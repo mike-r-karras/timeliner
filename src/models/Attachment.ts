@@ -10,6 +10,12 @@ export interface IAttachment extends Document {
   type: 'article' | 'photo' | 'video' | 'audio' | 'link' | 'document' | 'other';
   contentHash: string;
   data: Buffer;
+  caption?: string;
+  altText?: string;
+  creator?: string;
+  creditLine?: string;
+  copyright?: string;
+  date?: Date;
   createdBy: string;
   createdAt: Date;
   updatedAt: Date;
@@ -57,6 +63,29 @@ const AttachmentSchema = new Schema<IAttachment>(
       type: Buffer,
       required: true,
     },
+    caption: {
+      type: String,
+      maxlength: 1000,
+    },
+    altText: {
+      type: String,
+      maxlength: 500,
+    },
+    creator: {
+      type: String,
+      maxlength: 255,
+    },
+    creditLine: {
+      type: String,
+      maxlength: 255,
+    },
+    copyright: {
+      type: String,
+      maxlength: 500,
+    },
+    date: {
+      type: Date,
+    },
     createdBy: {
       type: Schema.Types.ObjectId,
       ref: 'User',
@@ -71,4 +100,9 @@ const AttachmentSchema = new Schema<IAttachment>(
 // Index for efficient content hash lookups
 AttachmentSchema.index({ contentHash: 1 });
 
-export default mongoose.models.Attachment || mongoose.model<IAttachment>('Attachment', AttachmentSchema);
+// Force model reload in development to pick up schema changes
+if (mongoose.models.Attachment) {
+  delete mongoose.models.Attachment;
+}
+
+export default mongoose.model<IAttachment>('Attachment', AttachmentSchema);

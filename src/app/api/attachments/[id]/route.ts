@@ -5,6 +5,78 @@ import Attachment from '@/models/Attachment';
 import AttachmentLink from '@/models/AttachmentLink';
 import { authOptions } from '@/lib/auth';
 
+export async function PUT(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const { id } = await params;
+    const body = await request.json();
+
+    // Convert empty strings to undefined
+    const caption = body.caption?.trim() || undefined;
+    const altText = body.altText?.trim() || undefined;
+    const creator = body.creator?.trim() || undefined;
+    const creditLine = body.creditLine?.trim() || undefined;
+    const copyright = body.copyright?.trim() || undefined;
+    const date = body.date ? new Date(body.date) : undefined;
+
+    await dbConnect();
+
+    // Verify user has access to this attachment
+    const attachmentLink = await AttachmentLink.findOne({
+      attachmentId: id,
+      createdBy: session.user.id,
+    });
+
+    if (!attachmentLink) {
+      return NextResponse.json({ error: 'Attachment not found or unauthorized' }, { status: 404 });
+    }
+
+    // Update attachment metadata
+    const updatedAttachment = await Attachment.findByIdAndUpdate(
+      id,
+      {
+        caption,
+        altText,
+        creator,
+        creditLine,
+        copyright,
+        date,
+      },
+      { new: true }
+    );
+
+    if (!updatedAttachment) {
+      return NextResponse.json({ error: 'Attachment not found' }, { status: 404 });
+    }
+
+    return NextResponse.json({
+      message: 'Attachment metadata updated successfully',
+      attachment: {
+        _id: updatedAttachment._id,
+        filename: updatedAttachment.filename,
+        originalName: updatedAttachment.originalName,
+        mimeType: updatedAttachment.mimeType,
+        size: updatedAttachment.size,
+        url: updatedAttachment.url,
+        type: updatedAttachment.type,
+        caption: updatedAttachment.caption,
+        altText: updatedAttachment.altText,
+        creator: updatedAttachment.creator,
+        creditLine: updatedAttachment.creditLine,
+        copyright: updatedAttachment.copyright,
+        date: updatedAttachment.date,
+      },
+    });
+  } catch (error) {
+    console.error('Error updating attachment metadata:', error);
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+  }
+}
+
 export async function DELETE(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const session = await getServerSession(authOptions);
