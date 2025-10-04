@@ -1,8 +1,8 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { Box, Fab, Menu, MenuItem, AppBar, Toolbar, Typography, Switch, FormControlLabel } from '@mui/material';
-import { Add, LocationOn, Timeline as TimelineIcon, People, AccountTree } from '@mui/icons-material';
+import { Box, Fab, Menu, MenuItem, AppBar, Toolbar, Typography, IconButton } from '@mui/material';
+import { Add, LocationOn, Timeline as TimelineIcon, People, AccountTree, Menu as MenuIcon } from '@mui/icons-material';
 import ResizablePanels from './ResizablePanels';
 import MapPanel from './MapPanel';
 import TimelinePanel from './TimelinePanel';
@@ -10,7 +10,8 @@ import EntitiesPanel from './EntitiesPanel';
 import EventModal from './EventModal';
 import EntityModal from './EntityModal';
 import LocationModal from './LocationModal';
-import ConnectionManager from './ConnectionManager';
+import ConnectionManagerModal from './ConnectionManagerModal';
+import TimelineManager from './TimelineManager';
 
 interface TimelineInterfaceProps {
   userId: string;
@@ -67,23 +68,120 @@ export default function TimelineInterface({ userId }: TimelineInterfaceProps) {
   const [entityModalDefaultType, setEntityModalDefaultType] = useState<string | undefined>(undefined);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [filteredEntityIds, setFilteredEntityIds] = useState<string[]>([]);
+  const [visibleEventIds, setVisibleEventIds] = useState<string[]>([]);
+  const [timelineManagerOpen, setTimelineManagerOpen] = useState(false);
+  const [currentTimelineTitle, setCurrentTimelineTitle] = useState<string>('');
+  const [mapReady, setMapReady] = useState(false);
 
-  // Connection-related states
-  const [showConnections, setShowConnections] = useState(false);
-  const [isConnecting, setIsConnecting] = useState(false);
-  const [connectingSource, setConnectingSource] = useState<{
-    type: 'event' | 'entity';
-    id: string;
-    name: string;
-  } | null>(null);
+  // Connection manager modal state
+  const [connectionManagerOpen, setConnectionManagerOpen] = useState(false);
 
   // Initialize or load user's timeline
   useEffect(() => {
     initializeTimeline();
   }, [userId]);
 
+  // Save current timeline ID to localStorage when it changes
+  useEffect(() => {
+    if (currentTimelineId) {
+      localStorage.setItem('timeliner:currentTimelineId', currentTimelineId);
+    }
+  }, [currentTimelineId]);
+
+  // Restore selected items when timeline changes
+  useEffect(() => {
+    if (currentTimelineId) {
+      const savedSelection = localStorage.getItem(`timeliner:selection:${currentTimelineId}`);
+      if (savedSelection) {
+        try {
+          const parsed = JSON.parse(savedSelection);
+          setSelectedItems(parsed);
+        } catch (error) {
+          console.error('Error parsing saved selection:', error);
+        }
+      } else {
+        // Clear selection when switching to a timeline without saved selection
+        setSelectedItems({ events: [], entities: [], locations: [] });
+      }
+    }
+  }, [currentTimelineId]);
+
+  // Save selected items to localStorage when they change
+  useEffect(() => {
+    if (currentTimelineId) {
+      localStorage.setItem(`timeliner:selection:${currentTimelineId}`, JSON.stringify(selectedItems));
+    }
+  }, [selectedItems, currentTimelineId]);
+
+  // Fetch connected entities when visible events change
+  useEffect(() => {
+    const fetchConnectedEntities = async () => {
+      // Check if timeline panel is visible
+      const timelinePanel = panels.find(p => p.id === 'timeline');
+      const isTimelinePanelVisible = timelinePanel?.isVisible;
+
+      // If timeline panel is hidden, clear the filter
+      if (!isTimelinePanelVisible) {
+        setFilteredEntityIds([]);
+        return;
+      }
+
+      // If no visible events, clear the filter
+      if (!currentTimelineId || visibleEventIds.length === 0) {
+        setFilteredEntityIds([]);
+        return;
+      }
+
+      try {
+        const response = await fetch(`/api/connections?timelineId=${currentTimelineId}&eventIds=${visibleEventIds.join(',')}`);
+        if (response.ok) {
+          const connections = await response.json();
+
+          // Extract entity IDs from connections
+          const entityIds = new Set<string>();
+          connections.forEach((conn: any) => {
+            // If source is an event and target is an entity, add target
+            if (conn.sourceModel === 'Event' && conn.targetModel === 'Entity' && visibleEventIds.includes(conn.sourceId._id || conn.sourceId)) {
+              entityIds.add(conn.targetId._id || conn.targetId);
+            }
+            // If target is an event and source is an entity, add source
+            if (conn.targetModel === 'Event' && conn.sourceModel === 'Entity' && visibleEventIds.includes(conn.targetId._id || conn.targetId)) {
+              entityIds.add(conn.sourceId._id || conn.sourceId);
+            }
+          });
+
+          setFilteredEntityIds(Array.from(entityIds));
+        }
+      } catch (error) {
+        console.error('Error fetching connected entities:', error);
+      }
+    };
+
+    fetchConnectedEntities();
+  }, [currentTimelineId, visibleEventIds, panels]);
+
   const initializeTimeline = async () => {
     try {
+      // First check localStorage for saved timeline ID
+      const savedTimelineId = localStorage.getItem('timeliner:currentTimelineId');
+
+      if (savedTimelineId) {
+        // Try to load the saved timeline
+        try {
+          const response = await fetch(`/api/timelines/${savedTimelineId}`);
+          if (response.ok) {
+            const timeline = await response.json();
+            setCurrentTimelineId(timeline._id);
+            setCurrentTimelineTitle(timeline.title);
+            return;
+          }
+        } catch (error) {
+          console.error('Error loading saved timeline:', error);
+          // Continue to fetch current timeline
+        }
+      }
+
+      // If no saved timeline or it failed to load, fetch current timeline
       const response = await fetch('/api/timelines/current', {
         headers: { 'Content-Type': 'application/json' },
       });
@@ -91,6 +189,7 @@ export default function TimelineInterface({ userId }: TimelineInterfaceProps) {
       if (response.ok) {
         const timeline = await response.json();
         setCurrentTimelineId(timeline._id);
+        setCurrentTimelineTitle(timeline.title);
       } else {
         // Create default timeline
         const createResponse = await fetch('/api/timelines', {
@@ -102,6 +201,7 @@ export default function TimelineInterface({ userId }: TimelineInterfaceProps) {
         if (createResponse.ok) {
           const newTimeline = await createResponse.json();
           setCurrentTimelineId(newTimeline._id);
+          setCurrentTimelineTitle(newTimeline.title);
           // Open add event modal for new timelines
           setEventModalOpen(true);
         }
@@ -216,28 +316,26 @@ export default function TimelineInterface({ userId }: TimelineInterfaceProps) {
     triggerRefresh();
   };
 
-  // Connection handlers
-  const handleStartConnection = (sourceType: 'event' | 'entity', sourceId: string, sourceName: string) => {
-    setConnectingSource({ type: sourceType, id: sourceId, name: sourceName });
-    setIsConnecting(true);
-  };
 
-  const handleConnectionComplete = () => {
-    setIsConnecting(false);
-    setConnectingSource(null);
+  // Timeline management handlers
+  const handleTimelineChange = async (timelineId: string) => {
+    setCurrentTimelineId(timelineId);
     triggerRefresh();
+
+    // Update current timeline title
+    try {
+      const response = await fetch(`/api/timelines/${timelineId}`);
+      if (response.ok) {
+        const timeline = await response.json();
+        setCurrentTimelineTitle(timeline.title);
+      }
+    } catch (error) {
+      console.error('Error fetching timeline details:', error);
+    }
   };
 
-  const handleConnectionTarget = (targetType: 'event' | 'entity', targetId: string, targetName: string) => {
-    if (!isConnecting || !connectingSource) return;
-
-    // Don't connect to self
-    if (targetId === connectingSource.id) return;
-
-    // Call the connection handler via global reference
-    if ((window as any).connectionManagerHandler) {
-      (window as any).connectionManagerHandler(targetType, targetId, targetName);
-    }
+  const handleMapReady = () => {
+    setMapReady(true);
   };
 
   // Update panel components with current state
@@ -254,6 +352,8 @@ export default function TimelineInterface({ userId }: TimelineInterfaceProps) {
             onAddLocation={handleMapLocationAdd}
             refreshTrigger={refreshTrigger}
             filteredEntityIds={filteredEntityIds}
+            visibleEventIds={visibleEventIds}
+            onMapReady={handleMapReady}
           />
         );
         break;
@@ -266,9 +366,8 @@ export default function TimelineInterface({ userId }: TimelineInterfaceProps) {
             onEditEvent={handleEditEvent}
             onAddEvent={handleAddEvent}
             refreshTrigger={refreshTrigger}
-            onStartConnection={handleStartConnection}
-            isConnecting={isConnecting}
-            onConnectionTarget={handleConnectionTarget}
+            onVisibleEventsChange={setVisibleEventIds}
+            mapReady={mapReady}
           />
         );
         break;
@@ -282,42 +381,39 @@ export default function TimelineInterface({ userId }: TimelineInterfaceProps) {
             onAddEntity={handleAddEntity}
             refreshTrigger={refreshTrigger}
             onEntitiesFiltered={handleEntitiesFiltered}
-            onStartConnection={handleStartConnection}
-            isConnecting={isConnecting}
-            onConnectionTarget={handleConnectionTarget}
           />
         );
         break;
     }
 
     return { ...panel, component };
-  }), [panels, currentTimelineId, selectedItems, refreshTrigger, filteredEntityIds, locationModalCoords, isConnecting, connectingSource]);
+  }), [panels, currentTimelineId, selectedItems, refreshTrigger, filteredEntityIds, locationModalCoords, mapReady, visibleEventIds]);
 
   return (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', position: 'relative' }}>
       {/* Top bar for controls */}
       <AppBar position="static" sx={{ zIndex: 1200 }}>
         <Toolbar variant="dense">
-          <Typography variant="h6" sx={{ flexGrow: 1 }}>
-            Timeline Controls
-          </Typography>
-          <FormControlLabel
-            control={
-              <Switch
-                checked={showConnections}
-                onChange={(e) => setShowConnections(e.target.checked)}
-                size="small"
-              />
-            }
-            label="Show Relationships"
-            sx={{ color: 'inherit' }}
-          />
-          {isConnecting && (
-            <Typography variant="body2" sx={{ ml: 2, color: 'warning.light' }}>
-              <AccountTree sx={{ mr: 1, verticalAlign: 'middle' }} />
-              Connecting from: {connectingSource?.name}
+          <Box sx={{ display: 'flex', alignItems: 'center', flexGrow: 1, gap: 1 }}>
+            <IconButton
+              size="small"
+              onClick={() => setTimelineManagerOpen(true)}
+              sx={{ color: 'inherit' }}
+            >
+              <MenuIcon />
+            </IconButton>
+            <Typography variant="h6">
+              {currentTimelineTitle || 'Timeline'}
             </Typography>
-          )}
+          </Box>
+          <IconButton
+            size="small"
+            onClick={() => setConnectionManagerOpen(true)}
+            sx={{ color: 'inherit' }}
+            title="Connection Manager"
+          >
+            <AccountTree />
+          </IconButton>
         </Toolbar>
       </AppBar>
 
@@ -402,15 +498,19 @@ export default function TimelineInterface({ userId }: TimelineInterfaceProps) {
         initialCoordinates={locationModalCoords}
       />
 
-      {/* Connection Manager */}
-      <ConnectionManager
+      {/* Connection Manager Modal */}
+      <ConnectionManagerModal
+        open={connectionManagerOpen}
+        onClose={() => setConnectionManagerOpen(false)}
         timelineId={currentTimelineId}
-        showConnections={showConnections}
-        isConnecting={isConnecting}
-        connectingSource={connectingSource}
-        onConnectionComplete={handleConnectionComplete}
-        refreshTrigger={refreshTrigger}
-        onConnectionTarget={handleConnectionTarget}
+      />
+
+      {/* Timeline Manager */}
+      <TimelineManager
+        open={timelineManagerOpen}
+        onClose={() => setTimelineManagerOpen(false)}
+        currentTimelineId={currentTimelineId}
+        onTimelineChange={handleTimelineChange}
       />
     </Box>
   );

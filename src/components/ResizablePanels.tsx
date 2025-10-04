@@ -251,7 +251,7 @@ export default function ResizablePanels({
           </Box>
 
           {/* Panel Content */}
-          <Box sx={{ flex: 1, overflow: 'auto', p: 1 }}>
+          <Box sx={{ flex: 1, overflow: 'hidden', minHeight: 0 }}>
             {panel.component}
           </Box>
 

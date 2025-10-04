@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth';
 import dbConnect from '@/lib/mongodb';
 import Event from '@/models/Event';
 import Timeline from '@/models/Timeline';
+import Location from '@/models/Location';
 import { authOptions } from '@/lib/auth';
 
 export async function GET(request: NextRequest) {

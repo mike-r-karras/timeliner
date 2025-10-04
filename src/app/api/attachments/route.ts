@@ -24,6 +24,11 @@ export async function GET(request: NextRequest) {
 
     await dbConnect();
 
+    // Ensure Attachment model is loaded before populate
+    if (!Attachment) {
+      console.error('Attachment model not loaded');
+    }
+
     // Verify ownership based on the type
     if (eventId) {
       const event = await Event.findOne({
@@ -37,7 +42,10 @@ export async function GET(request: NextRequest) {
 
       // Find attachments linked to this event
       const attachmentLinks = await AttachmentLink.find({ eventId })
-        .populate('attachmentId')
+        .populate({
+          path: 'attachmentId',
+          model: Attachment
+        })
         .sort({ createdAt: -1 });
 
       const attachments = attachmentLinks.map(link => ({
@@ -69,7 +77,10 @@ export async function GET(request: NextRequest) {
 
       // Find attachments linked to this entity
       const attachmentLinks = await AttachmentLink.find({ entityId })
-        .populate('attachmentId')
+        .populate({
+          path: 'attachmentId',
+          model: Attachment
+        })
         .sort({ createdAt: -1 });
 
       const attachments = attachmentLinks.map(link => ({

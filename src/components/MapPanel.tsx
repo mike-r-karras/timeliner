@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Box, Typography, CircularProgress, IconButton, Tooltip, Fab } from '@mui/material';
 import { Add, MyLocation, Search } from '@mui/icons-material';
 import dynamic from 'next/dynamic';
+import 'leaflet/dist/leaflet.css';
 
 // Dynamically import MapContainer to avoid SSR issues
 const MapContainer = dynamic(() => import('react-leaflet').then((mod) => mod.MapContainer), { ssr: false });
@@ -79,23 +80,30 @@ interface MapPanelProps {
   onAddLocation?: (lat: number, lng: number) => void;
   refreshTrigger?: number;
   filteredEntityIds?: string[];
+  visibleEventIds?: string[];
+  onMapReady?: () => void;
 }
 
-export default function MapPanel({ timelineId, selectedItems, onSelection, onAddLocation, refreshTrigger, filteredEntityIds }: MapPanelProps) {
+export default function MapPanel({ timelineId, selectedItems, onSelection, onAddLocation, refreshTrigger, filteredEntityIds, visibleEventIds, onMapReady }: MapPanelProps) {
   const [loading, setLoading] = useState(false);
   const [events, setEvents] = useState<Event[]>([]);
   const [entities, setEntities] = useState<Entity[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
   const [mapCenter, setMapCenter] = useState<[number, number]>([39.8283, -98.5795]); // Geographic center of US default
-  const [mapZoom, setMapZoom] = useState(10);
+  const [mapZoom, setMapZoom] = useState(6); // Better default zoom - continental view
   const [addingLocation, setAddingLocation] = useState(false);
   const [isClient, setIsClient] = useState(false);
   const mapRef = useRef<any>(null);
 
-  useEffect(() => {
-    setIsClient(true);
+  // Client-only logging to prevent hydration mismatches
+  const clientLog = (...args: any[]) => {
+    if (typeof window !== 'undefined') {
+      console.log(...args);
+    }
+  };
 
-    // Fix Leaflet marker icons
+  useEffect(() => {
+    // Fix Leaflet marker icons and set client ready after Leaflet loads
     if (typeof window !== 'undefined') {
       // Import Leaflet dynamically to avoid SSR issues
       import('leaflet').then((L) => {
@@ -105,9 +113,15 @@ export default function MapPanel({ timelineId, selectedItems, onSelection, onAdd
           iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png',
           shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
         });
+
+        // Set client ready after Leaflet is fully loaded and DOM is ready
+        setTimeout(() => {
+          setIsClient(true);
+          onMapReady?.();
+        }, 100);
       });
     }
-  }, []);
+  }, [onMapReady]);
 
   useEffect(() => {
     if (timelineId) {
@@ -117,21 +131,21 @@ export default function MapPanel({ timelineId, selectedItems, onSelection, onAdd
 
   // Calculate map bounds with useMemo to prevent infinite loops
   const mapBounds = useMemo(() => {
-    console.log('=== MapBounds calculation triggered ===');
-    console.log('Events count:', events.length, 'Entities count:', entities.length);
-    console.log('Events data:', events.slice(0, 2)); // Show first 2 events
-    console.log('Entities data:', entities.slice(0, 2)); // Show first 2 entities
-    console.log('Selected items:', selectedItems);
-    console.log('Filtered entity IDs:', filteredEntityIds);
+    clientLog('=== MapBounds calculation triggered ===');
+    clientLog('Events count:', events.length, 'Entities count:', entities.length);
+    clientLog('Events data:', events.slice(0, 2)); // Show first 2 events
+    clientLog('Entities data:', entities.slice(0, 2)); // Show first 2 entities
+    clientLog('Selected items:', selectedItems);
+    clientLog('Filtered entity IDs:', filteredEntityIds);
 
     if (events.length === 0 && entities.length === 0) {
-      console.log('No events or entities, returning null');
+      clientLog('No events or entities, returning null');
       return null;
     }
 
     const selectedEventIds = selectedItems?.events || [];
     const selectedEntityIds = selectedItems?.entities || [];
-    console.log('Selected items - events:', selectedEventIds, 'entities:', selectedEntityIds);
+    clientLog('Selected items - events:', selectedEventIds, 'entities:', selectedEntityIds);
 
     // Get items with locations (validate coordinates are valid numbers)
     let eventsToShow = events.filter(event => {
@@ -146,7 +160,7 @@ export default function MapPanel({ timelineId, selectedItems, onSelection, onAdd
     });
     let entitiesToShow = entities.filter(entity => {
       const loc = entity.locationId;
-      return entity.type === 'place' && loc &&
+      return loc &&
         typeof loc.latitude === 'number' &&
         typeof loc.longitude === 'number' &&
         !isNaN(loc.latitude) &&
@@ -155,13 +169,21 @@ export default function MapPanel({ timelineId, selectedItems, onSelection, onAdd
         Math.abs(loc.longitude) <= 180;
     });
 
-    console.log('Items with locations - events:', eventsToShow.length, 'entities:', entitiesToShow.length);
+    clientLog('Items with locations - events:', eventsToShow.length, 'entities:', entitiesToShow.length);
+    // Temporary debugging
+    if (entitiesToShow.length === 0 && entities.length > 0) {
+      clientLog('DEBUG: No entities with locations! Total entities:', entities.length);
+      clientLog('First entity:', entities[0]?.name, 'locationId:', entities[0]?.locationId ? 'HAS locationId' : 'NO locationId');
+      if (entities[0]?.locationId) {
+        clientLog('First entity location details:', entities[0].locationId);
+      }
+    }
 
     // Apply entity filter if provided
     if (filteredEntityIds && filteredEntityIds.length > 0) {
-      console.log('Applying entity filter:', filteredEntityIds);
+      clientLog('Applying entity filter:', filteredEntityIds);
       entitiesToShow = entitiesToShow.filter(entity => filteredEntityIds.includes(entity._id));
-      console.log('After entity filter - entities:', entitiesToShow.length);
+      clientLog('After entity filter - entities:', entitiesToShow.length);
     }
 
     // Filter by selections if any items are selected
@@ -178,18 +200,19 @@ export default function MapPanel({ timelineId, selectedItems, onSelection, onAdd
       ...entitiesToShow.map(entity => entity.locationId!)
     ];
 
-    console.log('All locations for bounds:', allLocations.map(loc => ({ name: loc.name, lat: loc.latitude, lng: loc.longitude })));
+    clientLog('All locations for bounds:', allLocations.map(loc => ({ name: loc.name, lat: loc.latitude, lng: loc.longitude })));
 
     if (allLocations.length === 0) {
-      console.log('No locations found, returning null');
+      clientLog('No locations found, returning null');
+      clientLog('DEBUG: No locations found! Events:', eventsToShow.length, 'Entities:', entitiesToShow.length);
       return null;
     }
 
     if (allLocations.length === 1) {
-      console.log('Single location found:', allLocations[0].name, 'at', allLocations[0].latitude, allLocations[0].longitude);
+      clientLog('Single location found:', allLocations[0].name, 'at', allLocations[0].latitude, allLocations[0].longitude);
       return {
         center: [allLocations[0].latitude, allLocations[0].longitude] as [number, number],
-        zoom: 15
+        zoom: 12 // Better default for single location
       };
     }
 
@@ -204,23 +227,25 @@ export default function MapPanel({ timelineId, selectedItems, onSelection, onAdd
     const centerLat = (minLat + maxLat) / 2;
     const centerLng = (minLng + maxLng) / 2;
 
-    console.log('Calculated bounds:', { minLat, maxLat, minLng, maxLng });
-    console.log('Calculated center:', { centerLat, centerLng });
+    clientLog('Calculated bounds:', { minLat, maxLat, minLng, maxLng });
+    clientLog('Calculated center:', { centerLat, centerLng });
 
     // Calculate zoom level based on bounds with padding
     const latDiff = maxLat - minLat;
     const lngDiff = maxLng - minLng;
     const maxDiff = Math.max(latDiff, lngDiff);
 
-    let zoom = 10;
-    if (maxDiff < 0.01) zoom = 15;
-    else if (maxDiff < 0.05) zoom = 13;
-    else if (maxDiff < 0.1) zoom = 12;
-    else if (maxDiff < 0.5) zoom = 10;
-    else if (maxDiff < 1) zoom = 9;
-    else zoom = 8;
+    let zoom = 12; // Default higher zoom for better detail
+    if (maxDiff < 0.005) zoom = 17;  // Very close locations - neighborhood level
+    else if (maxDiff < 0.01) zoom = 15;   // City district level
+    else if (maxDiff < 0.05) zoom = 13;   // City level
+    else if (maxDiff < 0.1) zoom = 12;    // Metropolitan area
+    else if (maxDiff < 0.5) zoom = 10;    // Regional level
+    else if (maxDiff < 1) zoom = 8;       // State level
+    else if (maxDiff < 5) zoom = 6;       // Country level
+    else zoom = 4; // Continental level
 
-    console.log('Final map bounds result:', { center: [centerLat, centerLng], zoom });
+    clientLog('Final map bounds result:', { center: [centerLat, centerLng], zoom });
 
     return {
       center: [centerLat, centerLng] as [number, number],
@@ -231,11 +256,46 @@ export default function MapPanel({ timelineId, selectedItems, onSelection, onAdd
   // Update map when bounds change
   useEffect(() => {
     if (mapBounds && mapRef.current) {
-      console.log('Updating map bounds to:', mapBounds.center, 'zoom:', mapBounds.zoom);
-      setMapCenter(mapBounds.center);
-      setMapZoom(mapBounds.zoom);
+      clientLog('Updating map bounds to:', mapBounds.center, 'zoom:', mapBounds.zoom);
+
+      // Calculate actual bounds for fitBounds
+      let eventsWithLocations = events.filter(event => event.locationId?.latitude && event.locationId?.longitude);
+
+      // Filter events by visibility in timeline
+      if (visibleEventIds && visibleEventIds.length > 0) {
+        eventsWithLocations = eventsWithLocations.filter(event => visibleEventIds.includes(event._id));
+      }
+
+      let entitiesWithLocations = entities.filter(entity => entity.locationId?.latitude && entity.locationId?.longitude);
+
+      // Apply entity filtering if active
+      if (filteredEntityIds && filteredEntityIds.length > 0) {
+        entitiesWithLocations = entitiesWithLocations.filter(entity => filteredEntityIds.includes(entity._id));
+      }
+      const allItems = [...eventsWithLocations, ...entitiesWithLocations];
+
+      if (allItems.length > 0) {
+        // Create bounds array for Leaflet fitBounds
+        const bounds = allItems.map(item => [item.locationId.latitude, item.locationId.longitude]);
+        clientLog('Fitting map to bounds:', bounds);
+
+        try {
+          const map = mapRef.current;
+          map.fitBounds(bounds, { padding: [20, 20] });
+          clientLog('fitBounds successful');
+        } catch (error) {
+          clientLog('fitBounds failed:', error);
+          // Fallback to setView
+          try {
+            map.setView(mapBounds.center, mapBounds.zoom);
+            clientLog('Fallback setView successful');
+          } catch (fallbackError) {
+            clientLog('Fallback setView failed:', fallbackError);
+          }
+        }
+      }
     } else if (events.length > 0 || entities.length > 0) {
-      console.log('No map bounds calculated, staying at current position:', mapCenter);
+      clientLog('No map bounds calculated, staying at current position:', mapCenter);
 
       // As a fallback, try to center on the first available location
       const firstEventWithLocation = events.find(event => {
@@ -261,13 +321,54 @@ export default function MapPanel({ timelineId, selectedItems, onSelection, onAdd
 
       const fallbackLocation = firstEventWithLocation?.locationId || firstEntityWithLocation?.locationId;
       if (fallbackLocation && mapRef.current) {
-        console.log('Using fallback location:', fallbackLocation.name, 'at', fallbackLocation.latitude, fallbackLocation.longitude);
+        clientLog('Using fallback location:', fallbackLocation.name, 'at', fallbackLocation.latitude, fallbackLocation.longitude);
         const fallbackCenter: [number, number] = [fallbackLocation.latitude, fallbackLocation.longitude];
         setMapCenter(fallbackCenter);
         setMapZoom(12);
       }
     }
-  }, [mapBounds, events, entities, mapCenter]);
+  }, [mapBounds, events, entities]);
+
+  // Additional effect to ensure map updates when data changes or filtering changes
+  useEffect(() => {
+    if (mapRef.current && (events.length > 0 || entities.length > 0)) {
+      // Add a small delay to ensure the map is fully rendered
+      const timer = setTimeout(() => {
+        let eventsWithLocations = events.filter(event => event.locationId?.latitude && event.locationId?.longitude);
+
+        // Filter events by visibility in timeline
+        if (visibleEventIds && visibleEventIds.length > 0) {
+          eventsWithLocations = eventsWithLocations.filter(event => visibleEventIds.includes(event._id));
+        }
+
+        // Apply entity filtering
+        let entitiesWithLocations = entities.filter(entity => entity.locationId?.latitude && entity.locationId?.longitude);
+        if (filteredEntityIds && filteredEntityIds.length > 0) {
+          entitiesWithLocations = entitiesWithLocations.filter(entity => filteredEntityIds.includes(entity._id));
+          clientLog('Applying entity filter - showing', entitiesWithLocations.length, 'of', entities.filter(e => e.locationId?.latitude && e.locationId?.longitude).length, 'entities with locations');
+        }
+
+        const allItems = [...eventsWithLocations, ...entitiesWithLocations];
+
+        if (allItems.length > 0) {
+          const bounds = allItems.map(item => [item.locationId.latitude, item.locationId.longitude]);
+          clientLog('Data/filter changed - refitting map to bounds:', bounds);
+
+          try {
+            const map = mapRef.current;
+            map.fitBounds(bounds, { padding: [20, 20] });
+            clientLog('Data-driven fitBounds successful');
+          } catch (error) {
+            clientLog('Data-driven fitBounds failed:', error);
+          }
+        } else {
+          clientLog('No items with locations after filtering - keeping current map view');
+        }
+      }, 100);
+
+      return () => clearTimeout(timer);
+    }
+  }, [events, entities, filteredEntityIds?.length, filteredEntityIds?.join(','), visibleEventIds?.length, visibleEventIds?.join(',')]); // This effect runs whenever events, entities, or filtering changes
 
   useEffect(() => {
     // Update map view when center/zoom changes
@@ -279,7 +380,7 @@ export default function MapPanel({ timelineId, selectedItems, onSelection, onAdd
   const fetchMapData = async () => {
     setLoading(true);
     try {
-      console.log('Fetching map data for timelineId:', timelineId);
+      clientLog('Fetching map data for timelineId:', timelineId);
       const [eventsResponse, entitiesResponse, locationsResponse] = await Promise.all([
         fetch(`/api/events?timelineId=${timelineId}`),
         fetch(`/api/entities?timelineId=${timelineId}`),
@@ -288,8 +389,8 @@ export default function MapPanel({ timelineId, selectedItems, onSelection, onAdd
 
       if (eventsResponse.ok) {
         const eventData = await eventsResponse.json();
-        console.log('Fetched events:', eventData.length, 'events');
-        console.log('Sample event:', eventData[0]);
+        clientLog('Fetched events:', eventData.length, 'events');
+        clientLog('Sample event:', eventData[0]);
         setEvents(eventData);
       } else {
         console.error('Failed to fetch events:', eventsResponse.status, eventsResponse.statusText);
@@ -297,8 +398,8 @@ export default function MapPanel({ timelineId, selectedItems, onSelection, onAdd
 
       if (entitiesResponse.ok) {
         const entityData = await entitiesResponse.json();
-        console.log('Fetched entities:', entityData.length, 'entities');
-        console.log('Sample entity:', entityData[0]);
+        clientLog('Fetched entities:', entityData.length, 'entities');
+        clientLog('Sample entity:', entityData[0]);
         setEntities(entityData);
       } else {
         console.error('Failed to fetch entities:', entitiesResponse.status, entitiesResponse.statusText);
@@ -383,6 +484,30 @@ export default function MapPanel({ timelineId, selectedItems, onSelection, onAdd
     }
   };
 
+  const getEntityTypeColor = (entityType: string) => {
+    switch (entityType) {
+      case 'person': return '#E91E63'; // Pink
+      case 'organization': return '#3F51B5'; // Indigo
+      case 'place': return '#4CAF50'; // Green
+      case 'object': return '#FF9800'; // Orange
+      case 'concept': return '#9C27B0'; // Purple
+      case 'other': return '#607D8B'; // Blue Grey
+      default: return '#4CAF50'; // Default to green
+    }
+  };
+
+  const getEntityTypeIcon = (entityType: string) => {
+    switch (entityType) {
+      case 'person': return '👤';
+      case 'organization': return '🏢';
+      case 'place': return '📍';
+      case 'object': return '📦';
+      case 'concept': return '💡';
+      case 'other': return '❓';
+      default: return '📍';
+    }
+  };
+
   if (loading) {
     return (
       <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
@@ -448,52 +573,30 @@ export default function MapPanel({ timelineId, selectedItems, onSelection, onAdd
             maxZoom={19}
           />
 
+
           {/* Event Markers */}
           {events
             .filter(event => event.locationId?.latitude && event.locationId?.longitude)
+            .filter(event => !visibleEventIds || visibleEventIds.length === 0 || visibleEventIds.includes(event._id))
             .map((event) => {
               const location = event.locationId!;
               const isSelected = isEventSelected(event._id);
 
+              clientLog(`Rendering event marker for ${event.title} at [${location.latitude}, ${location.longitude}]`);
+
               return (
                 <React.Fragment key={`event-${event._id}`}>
-                  {/* Add pulsing outer rings for selected events */}
-                  {isSelected && (
-                    <>
-                      <CircleMarker
-                        center={[location.latitude, location.longitude]}
-                        radius={24}
-                        pathOptions={{
-                          fillColor: getImportanceColor(event.importance),
-                          fillOpacity: 0.1,
-                          color: getImportanceColor(event.importance),
-                          weight: 1,
-                          stroke: true,
-                        }}
-                      />
-                      <CircleMarker
-                        center={[location.latitude, location.longitude]}
-                        radius={18}
-                        pathOptions={{
-                          fillColor: getImportanceColor(event.importance),
-                          fillOpacity: 0.2,
-                          color: getImportanceColor(event.importance),
-                          weight: 1,
-                          stroke: true,
-                        }}
-                      />
-                    </>
-                  )}
+                  {/* Removed pulsing outer rings to simplify */}
 
                   {/* Main event marker */}
                   <CircleMarker
                     center={[location.latitude, location.longitude]}
                     radius={isSelected ? 12 : 8}
                     pathOptions={{
-                      fillColor: getImportanceColor(event.importance),
-                      fillOpacity: isSelected ? 0.9 : 0.7,
-                      color: isSelected ? '#ffffff' : getImportanceColor(event.importance),
-                      weight: isSelected ? 3 : 2,
+                      fillColor: '#FF0000', // Red for events
+                      fillOpacity: isSelected ? 1.0 : 0.8,
+                      color: isSelected ? '#FFFF00' : '#FFFFFF', // Yellow border when selected
+                      weight: isSelected ? 4 : 2,
                       stroke: true,
                     }}
                     eventHandlers={{
@@ -546,10 +649,9 @@ export default function MapPanel({ timelineId, selectedItems, onSelection, onAdd
               );
             })}
 
-          {/* Place Entity Markers */}
+          {/* Entity Markers */}
           {entities
             .filter(entity =>
-              entity.type === 'place' &&
               entity.locationId?.latitude &&
               entity.locationId?.longitude &&
               (!filteredEntityIds || filteredEntityIds.length === 0 || filteredEntityIds.includes(entity._id))
@@ -558,32 +660,21 @@ export default function MapPanel({ timelineId, selectedItems, onSelection, onAdd
               const location = entity.locationId!;
               const isSelected = isEntitySelected(entity._id);
 
+              clientLog(`Rendering entity marker for ${entity.name} (${entity.type}) at [${location.latitude}, ${location.longitude}]`);
+
               return (
                 <React.Fragment key={`entity-${entity._id}`}>
-                  {/* Add pulsing outer ring for selected entities */}
-                  {isSelected && (
-                    <CircleMarker
-                      center={[location.latitude, location.longitude]}
-                      radius={30}
-                      pathOptions={{
-                        fillColor: '#4CAF50', // Green for place entities
-                        fillOpacity: 0.2,
-                        color: '#4CAF50',
-                        weight: 2,
-                        className: 'pulsing-marker'
-                      }}
-                    />
-                  )}
+                  {/* Removed pulsing outer ring to simplify */}
 
                   {/* Main entity marker */}
                   <CircleMarker
                     center={[location.latitude, location.longitude]}
-                    radius={15}
+                    radius={isSelected ? 15 : 10}
                     pathOptions={{
-                      fillColor: '#4CAF50', // Green for place entities
-                      fillOpacity: isSelected ? 0.8 : 0.6,
-                      color: '#388E3C',
-                      weight: isSelected ? 3 : 2,
+                      fillColor: '#0000FF', // Blue for entities
+                      fillOpacity: isSelected ? 1.0 : 0.8,
+                      color: isSelected ? '#FFFF00' : '#FFFFFF', // Yellow border when selected
+                      weight: isSelected ? 4 : 2,
                       stroke: true,
                     }}
                     eventHandlers={{
@@ -594,11 +685,11 @@ export default function MapPanel({ timelineId, selectedItems, onSelection, onAdd
                   >
                     <Popup>
                       <Box>
-                        <Typography variant="subtitle2" sx={{ fontWeight: 'bold', color: '#4CAF50' }}>
-                          📍 {entity.name}
+                        <Typography variant="subtitle2" sx={{ fontWeight: 'bold', color: getEntityTypeColor(entity.type) }}>
+                          {getEntityTypeIcon(entity.type)} {entity.name}
                         </Typography>
-                        <Typography variant="caption" sx={{ color: '#4CAF50', fontWeight: 'medium' }}>
-                          Place Entity
+                        <Typography variant="caption" sx={{ color: getEntityTypeColor(entity.type), fontWeight: 'medium' }}>
+                          {entity.type.charAt(0).toUpperCase() + entity.type.slice(1)} Entity
                         </Typography>
                         {entity.description && (
                           <Typography variant="body2" sx={{ mt: 1 }}>
@@ -615,8 +706,8 @@ export default function MapPanel({ timelineId, selectedItems, onSelection, onAdd
                           Location: {location.name}
                         </Typography>
                         {isSelected && (
-                          <Typography variant="caption" display="block" sx={{ mt: 1, color: '#4CAF50', fontWeight: 'bold' }}>
-                            ● Selected Place Entity
+                          <Typography variant="caption" display="block" sx={{ mt: 1, color: getEntityTypeColor(entity.type), fontWeight: 'bold' }}>
+                            ● Selected {entity.type.charAt(0).toUpperCase() + entity.type.slice(1)} Entity
                           </Typography>
                         )}
                       </Box>
@@ -629,9 +720,9 @@ export default function MapPanel({ timelineId, selectedItems, onSelection, onAdd
                       center={[location.latitude, location.longitude]}
                       radius={location.radius}
                       pathOptions={{
-                        fillColor: '#4CAF50',
+                        fillColor: getEntityTypeColor(entity.type),
                         fillOpacity: isSelected ? 0.2 : 0.1,
-                        color: '#4CAF50',
+                        color: getEntityTypeColor(entity.type),
                         weight: isSelected ? 3 : 1,
                       }}
                     />

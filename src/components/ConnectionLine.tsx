@@ -2,8 +2,11 @@
 
 import React from 'react';
 import { useTheme } from '@mui/material/styles';
+import { IconButton, Dialog, DialogTitle, DialogContent, DialogActions, Button, Typography } from '@mui/material';
+import { Delete } from '@mui/icons-material';
 
 interface ConnectionLineProps {
+  connectionId: string;
   startX: number;
   startY: number;
   endX: number;
@@ -16,6 +19,10 @@ interface ConnectionLineProps {
   tags?: string[];
   description?: string;
   sourceType?: 'entity' | 'event';
+  sourceName?: string;
+  targetName?: string;
+  offsetIndex?: number; // For routing multiple lines side by side
+  onDelete?: (connectionId: string) => void;
 }
 
 // Relationship type to color mapping (compatible with light/dark modes)
@@ -73,6 +80,7 @@ const getRelationshipColor = (relationshipType: string, isDark: boolean): string
 };
 
 export default function ConnectionLine({
+  connectionId,
   startX,
   startY,
   endX,
@@ -85,11 +93,60 @@ export default function ConnectionLine({
   tags = [],
   description,
   sourceType,
+  sourceName,
+  targetName,
+  offsetIndex = 0,
+  onDelete,
 }: ConnectionLineProps) {
   const theme = useTheme();
   const isDark = theme.palette.mode === 'dark';
   const color = getRelationshipColor(relationshipType, isDark);
   const [isHovered, setIsHovered] = React.useState(false);
+  const [showTooltip, setShowTooltip] = React.useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = React.useState(false);
+
+  // Handle tooltip persistence
+  const handleMouseEnter = () => {
+    setIsHovered(true);
+    setShowTooltip(true);
+  };
+
+  const handleMouseLeave = () => {
+    setIsHovered(false);
+    // Don't hide tooltip immediately - let user hover over it
+    setTimeout(() => {
+      if (!isHovered) {
+        setShowTooltip(false);
+      }
+    }, 100);
+  };
+
+  const handleTooltipMouseEnter = () => {
+    setIsHovered(true);
+  };
+
+  const handleTooltipMouseLeave = () => {
+    setIsHovered(false);
+    setShowTooltip(false);
+  };
+
+  // Delete handlers
+  const handleDeleteClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setDeleteConfirmOpen(true);
+  };
+
+  const handleDeleteConfirm = () => {
+    if (onDelete) {
+      onDelete(connectionId);
+    }
+    setDeleteConfirmOpen(false);
+    setShowTooltip(false);
+  };
+
+  const handleDeleteCancel = () => {
+    setDeleteConfirmOpen(false);
+  };
 
   // Calculate line properties
   const strokeWidth = isSelected ? 3 : 2;
@@ -106,49 +163,58 @@ export default function ConnectionLine({
   // Create flowchart-style path with 90-degree turns
   const createFlowchartPath = () => {
     const extensionDistance = 10; // Fixed 10px extension from edges
+    const lineSpacing = 4; // Distance between parallel lines
 
     // For entities, extend left (negative direction)
     // For events, extend right (positive direction)
     // Use sourceType if available, otherwise fall back to position heuristic
     const isStartEntity = sourceType ? sourceType === 'entity' : startX < endX;
-    const startExtensionX = isStartEntity ? startX - extensionDistance : startX + extensionDistance;
+    const baseExtensionX = isStartEntity ? startX - extensionDistance : startX + extensionDistance;
 
-    // Keep the entire line at the same horizontal position as the first extension
-    const lineX = startExtensionX;
+    // Apply offset based on routing index (can be negative for center-balanced distribution)
+    // For entities, offset should go further left (more negative), never right
+    // For events, offset should go further right (more positive), never left
+    const offsetDirection = isStartEntity ? -1 : 1; // Offset away from the entity
+    const lineOffset = offsetIndex * lineSpacing * offsetDirection;
+    const lineX = baseExtensionX + lineOffset;
 
-    // Build path with rounded corners - entire line stays at same X position
+    // Build path with rounded corners at ALL bends: out -> vertical -> in
     let pathData = `M ${startX} ${startY}`;
 
-    // Calculate the horizontal distance for the first segment
-    const horizontalDistance = Math.abs(lineX - startX);
+    const horizontalDistance1 = Math.abs(lineX - startX);
+    const horizontalDistance2 = Math.abs(endX - lineX);
+    const verticalDistance = Math.abs(endY - startY);
 
-    // Vertical segment along the line position
-    if (Math.abs(endY - startY) > cornerRadius && horizontalDistance > cornerRadius) {
+    // Only use rounded corners if there's enough space for them
+    const canRoundFirstCorner = horizontalDistance1 > cornerRadius && verticalDistance > cornerRadius * 2;
+    const canRoundSecondCorner = horizontalDistance2 > cornerRadius && verticalDistance > cornerRadius * 2;
+
+    if (canRoundFirstCorner && canRoundSecondCorner) {
+      // Full 4-segment path with rounded corners: horizontal -> vertical -> horizontal
       const verticalDirection = endY > startY ? 1 : -1;
-      const horizontalDirection = lineX > startX ? 1 : -1;
+      const horizontalDirection1 = lineX > startX ? 1 : -1;
+      const horizontalDirection2 = endX > lineX ? 1 : -1;
 
-      // Horizontal extension with rounded corner at the bend
-      const firstCornerX = startX + (horizontalDistance - cornerRadius) * horizontalDirection;
+      // First horizontal segment (from start toward lineX, stopping before corner)
+      const firstCornerX = startX + (horizontalDistance1 - cornerRadius) * horizontalDirection1;
       pathData += ` L ${firstCornerX} ${startY}`;
 
       // First rounded corner (horizontal to vertical transition)
       pathData += ` Q ${lineX} ${startY} ${lineX} ${startY + (cornerRadius * verticalDirection)}`;
 
-      // Vertical line to near the target level
-      const verticalEndY = endY - (cornerRadius * verticalDirection);
-      if (Math.abs(verticalEndY - (startY + cornerRadius * verticalDirection)) > 0) {
-        pathData += ` L ${lineX} ${verticalEndY}`;
-      }
+      // Vertical segment (along lineX, from first corner to second corner)
+      const secondCornerY = endY - (cornerRadius * verticalDirection);
+      pathData += ` L ${lineX} ${secondCornerY}`;
 
-      // Rounded corner toward target
-      const finalHorizontalDirection = endX > lineX ? 1 : -1;
-      pathData += ` Q ${lineX} ${endY} ${lineX + (cornerRadius * finalHorizontalDirection)} ${endY}`;
+      // Second rounded corner (vertical to horizontal transition)
+      pathData += ` Q ${lineX} ${endY} ${lineX + (cornerRadius * horizontalDirection2)} ${endY}`;
 
       // Final horizontal segment to exact end point
       pathData += ` L ${endX} ${endY}`;
     } else {
-      // Direct connection for short distances or minimal height differences
+      // Fallback for tight spaces - use sharp corners
       pathData += ` L ${lineX} ${startY}`;
+      pathData += ` L ${lineX} ${endY}`;
       pathData += ` L ${endX} ${endY}`;
     }
 
@@ -162,6 +228,7 @@ export default function ConnectionLine({
   const midY = startY + (endY - startY) / 2;
 
   return (
+    <>
     <svg
       style={{
         position: 'absolute',
@@ -169,8 +236,8 @@ export default function ConnectionLine({
         left: 0,
         width: '100%',
         height: '100%',
-        pointerEvents: 'none',
-        zIndex: isDragging ? 1000 : 1,
+        pointerEvents: 'auto', // Allow hover interactions for tooltips
+        zIndex: isDragging ? 1000 : -1, // Negative to stay behind all content
       }}
     >
       <defs>
@@ -226,13 +293,13 @@ export default function ConnectionLine({
         style={{ cursor: 'pointer', pointerEvents: 'stroke' }}
         strokeLinecap="round"
         strokeLinejoin="round"
-        onMouseEnter={() => setIsHovered(true)}
-        onMouseLeave={() => setIsHovered(false)}
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
       />
 
-      {/* Hover tooltip */}
-      {isHovered && !isDragging && (
-        <g>
+      {/* Persistent hover tooltip with delete button */}
+      {showTooltip && !isDragging && (
+        <g onMouseEnter={handleTooltipMouseEnter} onMouseLeave={handleTooltipMouseLeave}>
           {(() => {
             const tooltipLines = [
               relationshipType.replace(/_/g, ' '),
@@ -240,8 +307,8 @@ export default function ConnectionLine({
               ...(description ? [description] : [])
             ];
             const maxLineLength = Math.max(...tooltipLines.map(line => line.length));
-            const tooltipWidth = Math.max(120, maxLineLength * 7);
-            const tooltipHeight = tooltipLines.length * 16 + 10;
+            const tooltipWidth = Math.max(150, maxLineLength * 7); // Wider for delete button
+            const tooltipHeight = tooltipLines.length * 16 + 40; // Extra height for button
 
             return (
               <>
@@ -256,7 +323,7 @@ export default function ConnectionLine({
                   strokeWidth={1}
                   rx={6}
                   opacity={0.95}
-                  style={{ filter: 'drop-shadow(2px 2px 4px rgba(0,0,0,0.2))' }}
+                  style={{ filter: 'drop-shadow(2px 2px 4px rgba(0,0,0,0.2))', pointerEvents: 'all' }}
                 />
                 {/* Tooltip text lines */}
                 {tooltipLines.map((line, index) => (
@@ -273,6 +340,32 @@ export default function ConnectionLine({
                     {line}
                   </text>
                 ))}
+
+                {/* Delete button */}
+                <g onClick={handleDeleteClick} style={{ cursor: 'pointer' }}>
+                  {/* Button background */}
+                  <rect
+                    x={midX - 30}
+                    y={midY + tooltipHeight / 2 - 35}
+                    width={60}
+                    height={24}
+                    fill="#ef5350"
+                    rx={4}
+                    style={{ pointerEvents: 'all' }}
+                  />
+                  {/* Delete icon (simple X) */}
+                  <text
+                    x={midX - 10}
+                    y={midY + tooltipHeight / 2 - 18}
+                    textAnchor="middle"
+                    fontSize={10}
+                    fill="white"
+                    fontFamily="Roboto, sans-serif"
+                    fontWeight="bold"
+                  >
+                    🗑️ Delete
+                  </text>
+                </g>
               </>
             );
           })()}
@@ -308,5 +401,27 @@ export default function ConnectionLine({
         </g>
       )}
     </svg>
+
+    {/* Delete Confirmation Dialog */}
+    <Dialog
+      open={deleteConfirmOpen}
+      onClose={handleDeleteCancel}
+      maxWidth="xs"
+      fullWidth
+    >
+      <DialogTitle>Delete Connection</DialogTitle>
+      <DialogContent>
+        <Typography>
+          Are you sure you want to delete the connection {sourceName || 'Unknown'} {relationshipType.replace(/_/g, ' ')} {targetName || 'Unknown'}?
+        </Typography>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={handleDeleteCancel}>Cancel</Button>
+        <Button onClick={handleDeleteConfirm} color="error" variant="contained">
+          Delete
+        </Button>
+      </DialogActions>
+    </Dialog>
+    </>
   );
 }

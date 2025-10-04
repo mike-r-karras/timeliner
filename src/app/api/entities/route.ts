@@ -35,6 +35,23 @@ export async function GET(request: NextRequest) {
       .populate('locationId')
       .sort({ name: 1 });
 
+    // Debug logging for map issue
+    console.log('=== ENTITIES DEBUG ===');
+    console.log('Total entities found:', entities.length);
+    entities.forEach((entity, index) => {
+      console.log(`Entity ${index + 1}: ${entity.name} (${entity.type})`);
+      console.log('  locationId:', entity.locationId ? 'has location' : 'no location');
+      if (entity.locationId) {
+        const loc = entity.locationId as any;
+        console.log('  location details:', {
+          name: loc.name,
+          latitude: loc.latitude,
+          longitude: loc.longitude,
+          hasValidCoords: !!(loc.latitude && loc.longitude && !isNaN(loc.latitude) && !isNaN(loc.longitude))
+        });
+      }
+    });
+
     return NextResponse.json(entities);
   } catch (error) {
     console.error('Error fetching entities:', error);

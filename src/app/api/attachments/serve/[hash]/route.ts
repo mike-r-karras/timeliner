@@ -7,7 +7,7 @@ import AttachmentLink from '@/models/AttachmentLink';
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { hash: string } }
+  { params }: { params: Promise<{ hash: string }> }
 ) {
   try {
     const session = await getServerSession(authOptions);
@@ -15,7 +15,7 @@ export async function GET(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const { hash } = params;
+    const { hash } = await params;
 
     if (!hash) {
       return NextResponse.json({ error: 'Hash parameter is required' }, { status: 400 });

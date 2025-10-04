@@ -14,6 +14,7 @@ export async function GET(request: NextRequest) {
 
     const { searchParams } = new URL(request.url);
     const timelineId = searchParams.get('timelineId');
+    const eventIds = searchParams.get('eventIds'); // Comma-separated list of event IDs
 
     if (!timelineId) {
       return NextResponse.json({ error: 'Timeline ID is required' }, { status: 400 });
@@ -31,7 +32,19 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Timeline not found' }, { status: 404 });
     }
 
-    const connections = await Connection.find({ timelineId })
+    // Build query
+    const query: any = { timelineId };
+
+    // If eventIds provided, filter connections where sourceId or targetId is in the event list
+    if (eventIds) {
+      const eventIdArray = eventIds.split(',').map(id => id.trim());
+      query.$or = [
+        { sourceId: { $in: eventIdArray }, sourceModel: 'Event' },
+        { targetId: { $in: eventIdArray }, targetModel: 'Event' }
+      ];
+    }
+
+    const connections = await Connection.find(query)
       .populate('sourceId')
       .populate('targetId')
       .sort({ createdAt: -1 });

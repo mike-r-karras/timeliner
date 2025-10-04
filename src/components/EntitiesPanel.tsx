@@ -18,7 +18,7 @@ import {
   DialogActions,
   Button,
 } from '@mui/material';
-import { Search, Edit, Add, Delete, Bolt } from '@mui/icons-material';
+import { Search, Edit, Add, Delete } from '@mui/icons-material';
 import AttachmentViewer from './AttachmentViewer';
 
 interface Entity {
@@ -53,9 +53,6 @@ interface EntitiesPanelProps {
   onAddEntity?: () => void;
   refreshTrigger?: number;
   onEntitiesFiltered?: (entityIds: string[]) => void;
-  onStartConnection?: (sourceType: 'entity', sourceId: string, sourceName: string) => void;
-  isConnecting?: boolean;
-  onConnectionTarget?: (targetType: 'entity', targetId: string, targetName: string) => void;
 }
 
 const getEntityTypeColor = (type: string) => {
@@ -75,7 +72,7 @@ const getEntityTypeColor = (type: string) => {
   }
 };
 
-export default function EntitiesPanel({ timelineId, selectedItems, onSelection, onEditEntity, onAddEntity, refreshTrigger, onEntitiesFiltered, onStartConnection, isConnecting, onConnectionTarget }: EntitiesPanelProps) {
+export default function EntitiesPanel({ timelineId, selectedItems, onSelection, onEditEntity, onAddEntity, refreshTrigger, onEntitiesFiltered }: EntitiesPanelProps) {
   const [loading, setLoading] = useState(false);
   const [entities, setEntities] = useState<Entity[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
@@ -89,8 +86,6 @@ export default function EntitiesPanel({ timelineId, selectedItems, onSelection, 
   const [deleting, setDeleting] = useState(false);
 
   // Local connection state
-  const [localIsConnecting, setLocalIsConnecting] = useState(false);
-  const [connectingSourceId, setConnectingSourceId] = useState<string | null>(null);
 
   useEffect(() => {
     if (timelineId) {
@@ -129,28 +124,9 @@ export default function EntitiesPanel({ timelineId, selectedItems, onSelection, 
   };
 
   const handleEntityClick = (entityId: string, shiftKey: boolean, entityName: string) => {
-    // If in connection mode, handle as target
-    if (localIsConnecting && connectingSourceId && onConnectionTarget) {
-      if (entityId !== connectingSourceId) {
-        onConnectionTarget('entity', entityId, entityName);
-        // Reset connection state
-        setLocalIsConnecting(false);
-        setConnectingSourceId(null);
-      }
-      return;
-    }
-
     // Normal selection behavior
     if (onSelection) {
       onSelection('entity', [entityId], shiftKey);
-    }
-  };
-
-  const handleStartConnection = (sourceId: string, sourceName: string) => {
-    setLocalIsConnecting(true);
-    setConnectingSourceId(sourceId);
-    if (onStartConnection) {
-      onStartConnection('entity', sourceId, sourceName);
     }
   };
 
@@ -224,7 +200,7 @@ export default function EntitiesPanel({ timelineId, selectedItems, onSelection, 
   }
 
   return (
-    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       {/* Header */}
       <Box sx={{ p: 2, borderBottom: 1, borderColor: 'divider' }}>
         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
@@ -258,17 +234,29 @@ export default function EntitiesPanel({ timelineId, selectedItems, onSelection, 
         />
       </Box>
 
-      {/* Connection mode indicator */}
-      {localIsConnecting && (
-        <Box sx={{ p: 1, backgroundColor: 'warning.light', textAlign: 'center' }}>
-          <Typography variant="caption" sx={{ color: 'warning.contrastText' }}>
-            🔗 Click an entity to connect to it
-          </Typography>
-        </Box>
-      )}
-
       {/* Entities List */}
-      <Box sx={{ flex: 1, overflow: 'auto', p: 1, pl: 3 }}>
+      <Box
+        sx={{
+          flex: 1,
+          overflow: 'auto',
+          p: 1,
+          pl: 3,
+          minHeight: 0, // Ensure flex child can shrink
+          '&::-webkit-scrollbar': {
+            width: '8px',
+          },
+          '&::-webkit-scrollbar-track': {
+            background: 'transparent',
+          },
+          '&::-webkit-scrollbar-thumb': {
+            background: 'rgba(0,0,0,0.2)',
+            borderRadius: '4px',
+            '&:hover': {
+              background: 'rgba(0,0,0,0.3)',
+            },
+          },
+        }}
+      >
         {filteredEntities.length === 0 ? (
           <Box sx={{ textAlign: 'center', py: 4 }}>
             <Typography color="text.secondary">
@@ -288,25 +276,8 @@ export default function EntitiesPanel({ timelineId, selectedItems, onSelection, 
                   cursor: 'pointer',
                   border: isEntitySelected(entity._id) ? '2px solid' : '1px solid',
                   borderColor: isEntitySelected(entity._id) ? 'primary.main' : 'divider',
+                  backgroundColor: isEntitySelected(entity._id) ? 'primary.50' : 'background.paper',
                   '&:hover': { elevation: 2 },
-                  ...(localIsConnecting && entity._id === connectingSourceId && {
-                    backgroundColor: 'success.light',
-                    borderColor: 'success.main',
-                    border: '3px solid',
-                  }),
-                  ...(localIsConnecting && entity._id !== connectingSourceId && {
-                    backgroundColor: 'warning.light',
-                    borderColor: 'warning.main',
-                    border: '3px solid',
-                    animation: 'pulse 1s infinite',
-                    '&:hover': {
-                      backgroundColor: 'warning.main',
-                      borderColor: 'warning.dark',
-                      '& .MuiTypography-root': {
-                        color: 'white'
-                      }
-                    }
-                  })
                 }}
                 onClick={(e) => {
                   e.stopPropagation();
@@ -345,17 +316,6 @@ export default function EntitiesPanel({ timelineId, selectedItems, onSelection, 
                         size="small"
                         onClick={(e) => {
                           e.stopPropagation();
-                          handleStartConnection(entity._id, entity.name);
-                        }}
-                        sx={{ opacity: 0.7, '&:hover': { opacity: 1, color: 'warning.main' } }}
-                        title="Create connection"
-                      >
-                        <Bolt fontSize="small" />
-                      </IconButton>
-                      <IconButton
-                        size="small"
-                        onClick={(e) => {
-                          e.stopPropagation();
                           handleDeleteEntity(entity);
                         }}
                         sx={{ opacity: 0.7, '&:hover': { opacity: 1, color: 'error.main' } }}
@@ -385,7 +345,7 @@ export default function EntitiesPanel({ timelineId, selectedItems, onSelection, 
                   {/* Attachment thumbnails */}
                   {entityAttachments[entity._id] && entityAttachments[entity._id].length > 0 && (
                     <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mt: 1 }}>
-                      {entityAttachments[entity._id].slice(0, 3).map((attachment) => (
+                      {entityAttachments[entity._id].map((attachment) => (
                         <Box
                           key={attachment._id}
                           sx={{
@@ -426,21 +386,6 @@ export default function EntitiesPanel({ timelineId, selectedItems, onSelection, 
                           )}
                         </Box>
                       ))}
-                      {entityAttachments[entity._id].length > 3 && (
-                        <Box sx={{
-                          width: 24,
-                          height: 24,
-                          borderRadius: 0.5,
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          backgroundColor: 'grey.200',
-                          fontSize: '8px',
-                          fontWeight: 'bold',
-                        }}>
-                          +{entityAttachments[entity._id].length - 3}
-                        </Box>
-                      )}
                     </Box>
                   )}
                 </CardContent>

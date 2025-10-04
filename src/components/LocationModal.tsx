@@ -392,8 +392,10 @@ export default function LocationModal({
               getOptionLabel={(option) =>
                 typeof option === 'string' ? option : option.formattedAddress
               }
-              renderOption={(props, option) => (
-                <Box component="li" {...props} onClick={() => handleLocationSelect(option)}>
+              renderOption={(props, option) => {
+                const { key, ...otherProps } = props;
+                return (
+                <Box component="li" key={key} {...otherProps} onClick={() => handleLocationSelect(option)}>
                   <LocationOn sx={{ mr: 1, color: 'action.active' }} />
                   <Box>
                     <Typography variant="body2">{option.formattedAddress}</Typography>
@@ -404,7 +406,8 @@ export default function LocationModal({
                     )}
                   </Box>
                 </Box>
-              )}
+                );
+              }}
               renderInput={(params) => (
                 <TextField
                   {...params}

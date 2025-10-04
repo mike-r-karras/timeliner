@@ -71,6 +71,8 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
   const [eventLinks, setEventLinks] = useState<Record<string, Link[]>>({});
   const [expandedLinks, setExpandedLinks] = useState<Set<string>>(new Set());
   const [timelineTitle, setTimelineTitle] = useState('Untitled');
+  const [eventHeights, setEventHeights] = useState<Record<string, number>>({});
+  const eventRefs = React.useRef<Record<string, HTMLDivElement | null>>({});
 
   // Client-only logging to prevent hydration mismatches
   const clientLog = (...args: any[]) => {
@@ -105,6 +107,10 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
   const [eventToDelete, setEventToDelete] = useState<Event | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [timeMarks, setTimeMarks] = useState<Array<{ position: number; date: Date; label: string; isMainMark: boolean }>>([]);
+  const [scrollRestored, setScrollRestored] = useState(false);
+  const [heightReady, setHeightReady] = useState(false);
+  const [zoomRestored, setZoomRestored] = useState(false);
+  const scrollSaveTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     setIsClient(true);
@@ -125,6 +131,7 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
     });
 
     setAvailableHeight(available);
+    setHeightReady(available > 0);
 
     // Window resize handler
     const handleResize = () => {
@@ -139,6 +146,7 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
         });
 
         setAvailableHeight(newAvailable);
+        setHeightReady(newAvailable > 0);
       }
     };
 
@@ -161,6 +169,114 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
     }
   }, [timelineId, isClient, refreshTrigger]);
 
+  // Restore zoom level when timeline loads
+  useEffect(() => {
+    if (timelineId && isClient) {
+      const savedZoomLevel = localStorage.getItem(`timeliner:zoom:${timelineId}`);
+      if (savedZoomLevel) {
+        const zoom = parseInt(savedZoomLevel, 10);
+        setZoomLevel(zoom);
+        setPrevZoomLevel(zoom);
+      }
+      // Mark zoom as restored after a brief delay to allow state to settle
+      setTimeout(() => setZoomRestored(true), 50);
+    }
+  }, [timelineId, isClient]);
+
+  // Save zoom level when it changes
+  useEffect(() => {
+    if (timelineId && isClient) {
+      localStorage.setItem(`timeliner:zoom:${timelineId}`, zoomLevel.toString());
+    }
+  }, [zoomLevel, timelineId, isClient]);
+
+  // Reset scroll and zoom restoration flags when timeline changes
+  useEffect(() => {
+    setScrollRestored(false);
+    setZoomRestored(false);
+  }, [timelineId]);
+
+  // Restore scroll position after timeline data loads and trigger initial visibility check
+  useEffect(() => {
+    // Wait for timeline height to be calculated and zoom to be restored before restoring scroll
+    if (!timelineScrollRef.current || !timelineId || scrollRestored || events.length === 0 || !isClient || !heightReady || !zoomRestored) return;
+
+    const manualVisibilityCheck = () => {
+      if (timelineScrollRef.current && onVisibleEventsChange) {
+        // Manually check which events are visible
+        const scrollContainer = timelineScrollRef.current;
+        const containerRect = scrollContainer.getBoundingClientRect();
+        const eventElements = scrollContainer.querySelectorAll('[data-event-id]');
+        const visible: string[] = [];
+
+        eventElements.forEach((element) => {
+          const rect = element.getBoundingClientRect();
+          const eventId = element.getAttribute('data-event-id');
+
+          // Check if element is in viewport
+          if (eventId && rect.bottom > containerRect.top && rect.top < containerRect.bottom) {
+            visible.push(eventId);
+          }
+        });
+
+        if (visible.length > 0) {
+          onVisibleEventsChange(visible);
+        }
+      }
+    };
+
+    const savedScrollPosition = localStorage.getItem(`timeliner:scroll:${timelineId}`);
+    if (savedScrollPosition) {
+      // Wait longer to ensure zoom is applied and timeline content is fully rendered at final height
+      setTimeout(() => {
+        requestAnimationFrame(() => {
+          if (timelineScrollRef.current) {
+            const scrollTop = parseInt(savedScrollPosition, 10);
+            timelineScrollRef.current.scrollTop = scrollTop;
+            setScrollRestored(true);
+
+            // Force visibility check after scroll restoration
+            requestAnimationFrame(manualVisibilityCheck);
+          }
+        });
+      }, 300); // Longer delay to ensure zoom and DOM are fully rendered
+    } else {
+      // No saved scroll position, but still need to trigger initial visibility check
+      setScrollRestored(true);
+      requestAnimationFrame(manualVisibilityCheck);
+    }
+  }, [timelineId, events, scrollRestored, isClient, heightReady, zoomRestored, onVisibleEventsChange]);
+
+  // Save scroll position when scrolling (throttled)
+  useEffect(() => {
+    if (!timelineScrollRef.current || !timelineId) return;
+
+    const handleScroll = () => {
+      if (!timelineScrollRef.current || !timelineId) return;
+
+      const scrollTop = timelineScrollRef.current.scrollTop;
+
+      // Throttle saves to localStorage
+      if (scrollSaveTimeoutRef.current) {
+        clearTimeout(scrollSaveTimeoutRef.current);
+      }
+
+      scrollSaveTimeoutRef.current = setTimeout(() => {
+        localStorage.setItem(`timeliner:scroll:${timelineId}`, scrollTop.toString());
+      }, 500); // Save after 500ms of no scrolling
+    };
+
+    const scrollElement = timelineScrollRef.current;
+    scrollElement.addEventListener('scroll', handleScroll);
+
+    return () => {
+      scrollElement.removeEventListener('scroll', handleScroll);
+      if (scrollSaveTimeoutRef.current) {
+        clearTimeout(scrollSaveTimeoutRef.current);
+      }
+    };
+  }, [timelineId]);
+
   // Generate time marks when events or zoom level change
   useEffect(() => {
     if (events.length > 0) {
@@ -169,11 +285,40 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
     }
   }, [events, zoomLevel]);
 
+  // Track event card heights using ResizeObserver
+  useEffect(() => {
+    const observer = new ResizeObserver((entries) => {
+      const newHeights: Record<string, number> = {};
+      entries.forEach((entry) => {
+        const eventId = entry.target.getAttribute('data-event-id');
+        if (eventId) {
+          newHeights[eventId] = entry.contentRect.height;
+        }
+      });
+
+      setEventHeights(prev => ({
+        ...prev,
+        ...newHeights
+      }));
+    });
+
+    Object.values(eventRefs.current).forEach((ref) => {
+      if (ref) {
+        observer.observe(ref);
+      }
+    });
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [events, selectedItems]);
+
   // Track visible events using Intersection Observer
   useEffect(() => {
     if (!timelineScrollRef.current || !onVisibleEventsChange || events.length === 0) return;
 
-    const visibleEventIds = new Set<string>();
+    // Use a ref to persist visible event IDs across observer callbacks
+    const visibleEventIdsRef = { current: new Set<string>() };
 
     // Create intersection observer
     const observer = new IntersectionObserver(
@@ -185,13 +330,13 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
           if (!eventId) return;
 
           if (entry.isIntersecting) {
-            if (!visibleEventIds.has(eventId)) {
-              visibleEventIds.add(eventId);
+            if (!visibleEventIdsRef.current.has(eventId)) {
+              visibleEventIdsRef.current.add(eventId);
               hasChanges = true;
             }
           } else {
-            if (visibleEventIds.has(eventId)) {
-              visibleEventIds.delete(eventId);
+            if (visibleEventIdsRef.current.has(eventId)) {
+              visibleEventIdsRef.current.delete(eventId);
               hasChanges = true;
             }
           }
@@ -199,7 +344,7 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
 
         // Only notify if there were changes
         if (hasChanges) {
-          onVisibleEventsChange(Array.from(visibleEventIds));
+          onVisibleEventsChange(Array.from(visibleEventIdsRef.current));
         }
       },
       {
@@ -219,11 +364,12 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
     return () => {
       observer.disconnect();
     };
-  }, [events, onVisibleEventsChange, zoomLevel, availableHeight]); // Re-run when events, zoom, or height changes
+  }, [events, onVisibleEventsChange]); // Only re-run when events or callback changes
 
-  // Maintain center focus when zoom level changes
+  // Maintain center focus when zoom level changes (but not during initial restoration)
   useEffect(() => {
-    if (!timelineScrollRef.current || prevZoomLevel === zoomLevel || availableHeight === 0) return;
+    // Skip if scroll hasn't been restored yet (initial load)
+    if (!timelineScrollRef.current || prevZoomLevel === zoomLevel || availableHeight === 0 || !scrollRestored) return;
 
     const scrollContainer = timelineScrollRef.current;
     const containerHeight = scrollContainer.clientHeight;
@@ -247,7 +393,7 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
     });
 
     setPrevZoomLevel(zoomLevel);
-  }, [zoomLevel, prevZoomLevel, availableHeight]);
+  }, [zoomLevel, prevZoomLevel, availableHeight, scrollRestored]);
 
   const fetchTimelineData = async () => {
     setLoading(true);
@@ -1005,179 +1151,206 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
 
           return (
             <Box sx={{
-              position: 'relative',
-              height: finalTimelineHeight,
+              display: 'flex',
+              flexDirection: 'column',
               px: 2,
-              py: 4, // Add vertical padding
-              minHeight: finalTimelineHeight // Ensure minimum height
+              py: 4,
             }}>
-              {/* Central Timeline Line */}
-              <Box
-                sx={{
-                  position: 'absolute',
-                  left: '50%',
-                  top: 0,
-                  bottom: 0,
-                  width: 3,
-                  backgroundColor: 'divider',
-                  transform: 'translateX(-50%)',
-                  zIndex: 1,
-                }}
-              />
 
-              {/* Time marks and events with shared position calculations */}
+              {/* Segmented timeline: alternating timeline segments and event cards */}
               {(() => {
-                // Calculate all event positions and bounds
-                const eventData = events.map((event, index) => {
+                // Sort events chronologically
+                const sortedEvents = [...events].sort((a, b) =>
+                  new Date(a.startDateTime).getTime() - new Date(b.startDateTime).getTime()
+                );
+
+                // Calculate temporal positions for all events (0-100%)
+                const eventTemporalData = sortedEvents.map((event) => {
                   const startTemporalPosition = getEventPosition(event.startDateTime, timeRange);
                   const endDateTime = event.endDateTime || event.startDateTime;
                   const endTemporalPosition = getEventPosition(endDateTime, timeRange);
-
-                  const centeringFactor = Math.max(0.1, zoomLevel / 100);
-                  const startCenterOffset = (50 - startTemporalPosition) * (1 - centeringFactor);
-                  const adjustedStartPosition = startTemporalPosition + startCenterOffset;
-                  const eventStartPosition = Math.max(5, Math.min(95, adjustedStartPosition));
-
-                  const endCenterOffset = (50 - endTemporalPosition) * (1 - centeringFactor);
-                  const adjustedEndPosition = endTemporalPosition + endCenterOffset;
-                  const eventEndPosition = Math.max(5, Math.min(95, adjustedEndPosition));
-
                   const isSelected = isEventSelected(event._id);
-                  const temporalHeightPercent = Math.abs(eventEndPosition - eventStartPosition);
-                  const temporalHeightPixels = (temporalHeightPercent / 100) * finalTimelineHeight;
-                  const minHeight = isSelected ? expandedEventHeight : collapsedEventHeight;
-                  const thisEventHeight = Math.max(minHeight, temporalHeightPixels);
-
-                  // For bounds calculation, use a more generous estimate for selected events
-                  // since they will expand to fit content
-                  const estimatedHeight = isSelected ? Math.max(thisEventHeight, 150) : thisEventHeight;
 
                   return {
                     event,
-                    index,
-                    eventStartPosition,
-                    eventEndPosition,
-                    thisEventHeight,
-                    estimatedHeight, // Used for bounds/overlap detection
-                    topInPixels: (eventStartPosition / 100) * finalTimelineHeight,
+                    startPercent: startTemporalPosition,
+                    endPercent: endTemporalPosition,
                     isSelected,
-                    pixelOffset: 0 // Will be calculated next
                   };
                 });
 
-                // Calculate pixel offsets for stacking
-                const eventBounds: Array<{ top: number; bottom: number }> = [];
-                eventData.forEach(data => {
-                  let pixelOffset = 0;
-                  for (const prevBound of eventBounds) {
-                    const thisTop = data.topInPixels + pixelOffset;
-                    if (thisTop < prevBound.bottom + 10) {
-                      pixelOffset = prevBound.bottom + 10 - data.topInPixels;
-                    }
+                // Create segments: alternating timeline portions and event cards
+                const segments: Array<{type: 'timeline' | 'event' | 'spacer', startPercent: number, endPercent: number, event?: any, isSelected?: boolean}> = [];
+
+                let currentPercent = 0;
+                eventTemporalData.forEach((eventData, index) => {
+                  const { event, startPercent, endPercent, isSelected } = eventData;
+
+                  // Add timeline segment before this event
+                  const durationBeforeEvent = startPercent - currentPercent;
+                  if (durationBeforeEvent > 0.5) {
+                    // Meaningful gap - render timeline segment with marks
+                    segments.push({
+                      type: 'timeline',
+                      startPercent: currentPercent,
+                      endPercent: startPercent,
+                    });
+                  } else if (durationBeforeEvent > 0) {
+                    // Very small gap - render spacer with just vertical line
+                    segments.push({
+                      type: 'spacer',
+                      startPercent: currentPercent,
+                      endPercent: startPercent,
+                    });
                   }
-                  data.pixelOffset = pixelOffset;
-                  const finalTop = data.topInPixels + pixelOffset;
-                  // Use estimatedHeight for bounds to account for fit-content expansion
-                  const finalBottom = finalTop + data.estimatedHeight;
-                  eventBounds.push({ top: finalTop, bottom: finalBottom });
+
+                  // Add event segment
+                  segments.push({
+                    type: 'event',
+                    startPercent,
+                    endPercent,
+                    event,
+                    isSelected,
+                  });
+
+                  currentPercent = endPercent;
                 });
 
-                // Render both time marks and events
-                return (
-                  <>
-                    {/* Time marks filtered to not overlap with events */}
-                    {timeMarks.map((mark, index) => {
-                      const isMicroMark = mark.label === '·';
-                      const markPositionPixels = (mark.position / 100) * finalTimelineHeight;
-
-                      // Check if this mark falls within any event bounds (with small buffer for safety)
-                      const buffer = 2; // 2px buffer to ensure marks at edges are also hidden
-                      const overlapsEvent = eventBounds.some(bounds =>
-                        markPositionPixels >= (bounds.top - buffer) && markPositionPixels <= (bounds.bottom + buffer)
-                      );
-
-                      // Skip rendering if mark overlaps with an event
-                      if (overlapsEvent) {
-                        return null;
-                      }
-
-                      return (
-                        <Box key={`mark-${index}`}>
-                          {/* Scale mark */}
-                          <Box
-                            sx={{
-                              position: 'absolute',
-                              left: mark.isMainMark ? 'calc(50% - 15px)' :
-                                     isMicroMark ? 'calc(50% - 2px)' : 'calc(50% - 10px)',
-                              top: `${mark.position}%`,
-                              width: mark.isMainMark ? 30 : isMicroMark ? 4 : 20,
-                              height: isMicroMark ? 2 : 2,
-                              backgroundColor: 'text.secondary',
-                              opacity: isMicroMark ? 0.4 : 1,
-                              zIndex: 2,
-                            }}
-                          />
-                          {/* Scale label */}
-                          {!isMicroMark && (
-                            <Typography
-                              variant={mark.isMainMark ? 'caption' : 'overline'}
-                              sx={{
-                                position: 'absolute',
-                                left: 'calc(50% + 20px)',
-                                top: `${mark.position}%`,
-                                transform: 'translateY(-50%)',
-                                color: 'text.secondary',
-                                fontSize: mark.isMainMark ? '0.75rem' : '0.65rem',
-                                fontWeight: mark.isMainMark ? 'medium' : 'normal',
-                                whiteSpace: 'nowrap',
-                                zIndex: 2,
-                              }}
-                            >
-                              {mark.label}
-                            </Typography>
-                          )}
-                        </Box>
-                      );
-                    })}
-
-                    {/* Events */}
-                    {eventData.map((data) => {
-                      const { event, index, eventStartPosition, eventEndPosition, thisEventHeight, pixelOffset, isSelected } = data;
-
-                  // Debug: Log event positioning
-                  clientLog(`Event ${index + 1}: "${event.title}" positioned at ${eventStartPosition.toFixed(1)}%-${eventEndPosition.toFixed(1)}%`, {
-                    startDateTime: event.startDateTime,
-                    endDateTime: event.endDateTime || event.startDateTime,
-                    startPosition: eventStartPosition,
-                    endPosition: eventEndPosition,
-                    duration: (event.endDateTime && event.endDateTime !== event.startDateTime) ? 'has duration' : 'instant',
-                    finalHeight: thisEventHeight.toFixed(0) + 'px',
-                    pixelOffset: pixelOffset,
-                    zoomLevel: zoomLevel
+                // Add final timeline segment after last event
+                if (currentPercent < 100) {
+                  segments.push({
+                    type: 'timeline',
+                    startPercent: currentPercent,
+                    endPercent: 100,
                   });
+                }
+
+                // Render segments
+                return segments.map((segment, segIndex) => {
+                  if (segment.type === 'timeline') {
+                    // Timeline segment with marks
+                    const segmentDuration = segment.endPercent - segment.startPercent;
+                    const segmentHeight = (segmentDuration / 100) * finalTimelineHeight;
+
+                    // Find marks in this segment
+                    const segmentMarks = timeMarks.filter(mark =>
+                      mark.position >= segment.startPercent && mark.position <= segment.endPercent
+                    );
+
+                    return (
+                      <Box
+                        key={`segment-${segIndex}`}
+                        sx={{
+                          position: 'relative',
+                          minHeight: segmentHeight,
+                          width: '100%',
+                        }}
+                      >
+                        {/* Vertical timeline line */}
+                        <Box
+                          sx={{
+                            position: 'absolute',
+                            left: '50%',
+                            top: 0,
+                            bottom: 0,
+                            width: 3,
+                            backgroundColor: 'divider',
+                            transform: 'translateX(-50%)',
+                            zIndex: 1,
+                          }}
+                        />
+
+                        {/* Scale marks for this segment */}
+                        {segmentMarks.map((mark, markIndex) => {
+                          const isMicroMark = mark.label === '·';
+                          const markPositionInSegment = ((mark.position - segment.startPercent) / segmentDuration) * 100;
+
+                          return (
+                            <Box key={`mark-${segIndex}-${markIndex}`}>
+                              {/* Scale mark */}
+                              <Box
+                                sx={{
+                                  position: 'absolute',
+                                  left: mark.isMainMark ? 'calc(50% - 15px)' :
+                                         isMicroMark ? 'calc(50% - 2px)' : 'calc(50% - 10px)',
+                                  top: `${markPositionInSegment}%`,
+                                  width: mark.isMainMark ? 30 : isMicroMark ? 4 : 20,
+                                  height: isMicroMark ? 2 : 2,
+                                  backgroundColor: 'text.secondary',
+                                  opacity: isMicroMark ? 0.4 : 1,
+                                  zIndex: 2,
+                                }}
+                              />
+                              {/* Scale label */}
+                              {!isMicroMark && (
+                                <Typography
+                                  variant={mark.isMainMark ? 'caption' : 'overline'}
+                                  sx={{
+                                    position: 'absolute',
+                                    left: 'calc(50% + 20px)',
+                                    top: `${markPositionInSegment}%`,
+                                    transform: 'translateY(-50%)',
+                                    color: 'text.secondary',
+                                    fontSize: mark.isMainMark ? '0.75rem' : '0.65rem',
+                                    fontWeight: mark.isMainMark ? 'medium' : 'normal',
+                                    whiteSpace: 'nowrap',
+                                    zIndex: 2,
+                                  }}
+                                >
+                                  {mark.label}
+                                </Typography>
+                              )}
+                            </Box>
+                          );
+                        })}
+                      </Box>
+                    );
+                  } else if (segment.type === 'spacer') {
+                    // Small spacer with just vertical line
+                    return (
+                      <Box
+                        key={`segment-${segIndex}`}
+                        sx={{
+                          position: 'relative',
+                          height: 5,
+                          width: '100%',
+                        }}
+                      >
+                        <Box
+                          sx={{
+                            position: 'absolute',
+                            left: '50%',
+                            top: 0,
+                            bottom: 0,
+                            width: 3,
+                            backgroundColor: 'divider',
+                            transform: 'translateX(-50%)',
+                            zIndex: 1,
+                          }}
+                        />
+                      </Box>
+                    );
+                  } else {
+                    // Event card segment
+                    const event = segment.event!;
+                    const isSelected = segment.isSelected!;
 
                   return (
                     <Box
                       key={event._id}
                       sx={{
-                        position: 'absolute',
-                        top: `calc(${eventStartPosition}% + ${pixelOffset}px)`,
-                        left: 8,
-                        right: 8,
-                        minHeight: thisEventHeight, // Minimum height for temporal duration
-                        height: isSelected ? 'auto' : thisEventHeight, // Auto for selected, fixed for collapsed
-                        zIndex: 3,
-                        display: 'flex',
-                        alignItems: 'stretch',
+                        width: '100%',
+                        px: 1,
                       }}
                     >
-                    {/* Event card */}
-                    <Card
+                      {/* Event card */}
+                      <Card
+                      ref={(el) => {
+                        eventRefs.current[event._id] = el;
+                      }}
                       data-event-id={event._id}
                       sx={{
                         width: '100%',
-                        height: isSelected ? 'auto' : '100%', // Auto height for selected events
-                        minHeight: isSelected ? thisEventHeight : undefined, // Ensure temporal coverage
                         cursor: 'pointer',
                         border: isSelected ? '2px solid' : '1px solid',
                         borderColor: isSelected ? 'primary.main' : 'divider',
@@ -1366,7 +1539,7 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
                                         }}
                                         onClick={(e) => e.stopPropagation()}
                                       >
-                                        {link.title}
+                                        {link.url}
                                       </Typography>
                                     ))}
                                   </Box>
@@ -1379,9 +1552,8 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
                     </Card>
                   </Box>
                 );
-                    })}
-                  </>
-                );
+                  }
+                });
               })()}
             </Box>
           );
