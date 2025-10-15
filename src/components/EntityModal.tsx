@@ -97,6 +97,7 @@ export default function EntityModal({
   const [selectedAttachment, setSelectedAttachment] = useState<Attachment | null>(null);
   const [locations, setLocations] = useState<Location[]>([]);
   const [locationModalOpen, setLocationModalOpen] = useState(false);
+  const [editingLocationId, setEditingLocationId] = useState<string | null>(null);
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [metadataDialogOpen, setMetadataDialogOpen] = useState(false);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
@@ -531,13 +532,28 @@ export default function EntityModal({
   };
 
   const handleAddLocation = () => {
+    setEditingLocationId(null);
     setLocationModalOpen(true);
   };
 
+  const handleEditLocation = () => {
+    if (formData.locationId) {
+      setEditingLocationId(formData.locationId);
+      setLocationModalOpen(true);
+    }
+  };
+
   const handleLocationCreated = (location: Location) => {
-    setLocations(prev => [...prev, location]);
+    if (editingLocationId) {
+      // Update existing location in the list
+      setLocations(prev => prev.map(loc => loc._id === location._id ? location : loc));
+    } else {
+      // Add new location to the list and select it
+      setLocations(prev => [...prev, location]);
+    }
     setFormData(prev => ({ ...prev, locationId: location._id }));
     setLocationModalOpen(false);
+    setEditingLocationId(null);
   };
 
   const getFileType = (mimeType: string): 'photo' | 'video' | 'audio' | 'document' | 'other' => {
@@ -638,6 +654,24 @@ export default function EntityModal({
                   </Select>
                 </FormControl>
                 <IconButton
+                  onClick={handleEditLocation}
+                  disabled={!formData.locationId}
+                  sx={{
+                    height: 56, // Match Select component height
+                    width: 56,
+                    bgcolor: 'primary.main',
+                    color: 'white',
+                    '&:hover': { bgcolor: 'primary.dark' },
+                    '&.Mui-disabled': {
+                      bgcolor: 'action.disabledBackground',
+                      color: 'action.disabled',
+                    },
+                  }}
+                  title="Edit selected location"
+                >
+                  <Edit />
+                </IconButton>
+                <IconButton
                   onClick={handleAddLocation}
                   sx={{
                     height: 56, // Match Select component height
@@ -646,6 +680,7 @@ export default function EntityModal({
                     color: 'white',
                     '&:hover': { bgcolor: 'primary.dark' }
                   }}
+                  title="Add new location"
                 >
                   <Add />
                 </IconButton>
@@ -861,9 +896,12 @@ export default function EntityModal({
       {/* Location Creation Modal */}
       <LocationModal
         open={locationModalOpen}
-        onClose={() => setLocationModalOpen(false)}
-        timelineId={timelineId}
+        onClose={() => {
+          setLocationModalOpen(false);
+          setEditingLocationId(null);
+        }}
         onLocationCreated={handleLocationCreated}
+        locationId={editingLocationId || undefined}
       />
 
       {/* Attachment Metadata Dialog */}

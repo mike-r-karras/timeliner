@@ -238,6 +238,7 @@ export default function EntitiesPanel({ timelineId, selectedItems, onSelection, 
       <Box
         sx={{
           flex: 1,
+          maxHeight: '80vh',
           overflow: 'auto',
           p: 1,
           pl: 3,

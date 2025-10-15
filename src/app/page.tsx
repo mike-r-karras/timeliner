@@ -77,11 +77,11 @@ function AuthenticatedContent() {
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexGrow: 1 }}>
             <img
               src="/logo.png"
-              alt="Timeliner Logo"
+              alt="Lucidio Logo"
               style={{ height: '56px', width: 'auto' }}
             />
             <Typography variant="h6" sx={{ fontWeight: 'bold' }}>
-              Timeliner
+              Lucidio
             </Typography>
           </Box>
           <IconButton color="inherit" onClick={handleMenuOpen}>
@@ -111,7 +111,7 @@ function AuthenticatedContent() {
         </Toolbar>
       </AppBar>
 
-      <Box sx={{ flex: 1, overflow: 'hidden', mb: '20px' }}>
+      <Box sx={{ flex: 1, overflow: 'hidden' }}>
         <TimelineInterface userId={session.user.id} />
       </Box>
 

@@ -4,6 +4,7 @@ export interface ITimeline extends Document {
   _id: string;
   title: string;
   description?: string;
+  timezone?: string;
   createdBy: string;
   isDefault?: boolean;
   createdAt: Date;
@@ -22,6 +23,11 @@ const TimelineSchema = new Schema<ITimeline>(
     description: {
       type: String,
       maxlength: 1000,
+    },
+    timezone: {
+      type: String,
+      default: 'UTC',
+      maxlength: 100,
     },
     createdBy: {
       type: Schema.Types.ObjectId,

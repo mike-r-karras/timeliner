@@ -23,10 +23,11 @@ import {
   CardMedia,
   CircularProgress,
 } from '@mui/material';
-import { CloudUpload, Delete, InsertDriveFile, Add, Link as LinkIcon, Edit } from '@mui/icons-material';
+import { CloudUpload, Delete, InsertDriveFile, Add, Link as LinkIcon, Edit, FormatQuote } from '@mui/icons-material';
 import { DateTimePicker } from '@mui/x-date-pickers/DateTimePicker';
 import AttachmentViewer from './AttachmentViewer';
 import LocationModal from './LocationModal';
+import FootnoteModal from './FootnoteModal';
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
 import { AdapterDateFns } from '@mui/x-date-pickers/AdapterDateFns';
 
@@ -61,6 +62,14 @@ interface Link {
   url: string;
 }
 
+interface Chain {
+  _id: string;
+  name: string;
+  color: string;
+  description?: string;
+  timelineId: string;
+}
+
 interface EventModalProps {
   open: boolean;
   onClose: () => void;
@@ -83,9 +92,19 @@ export default function EventModal({
     endDateTime: null as Date | null,
     importance: 3,
     locationId: '',
+    chainIds: [] as string[],
+    footnotes: [] as Array<{
+      number: number;
+      type: 'link' | 'attachment';
+      referenceId: string;
+      pageRange?: string;
+      customSource?: string;
+      date?: string;
+    }>,
   });
 
   const [locations, setLocations] = useState<Location[]>([]);
+  const [chains, setChains] = useState<Chain[]>([]);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [links, setLinks] = useState<Link[]>([]);
   const [loading, setLoading] = useState(false);
@@ -94,6 +113,7 @@ export default function EventModal({
   const [viewerOpen, setViewerOpen] = useState(false);
   const [selectedAttachment, setSelectedAttachment] = useState<Attachment | null>(null);
   const [locationModalOpen, setLocationModalOpen] = useState(false);
+  const [editingLocationId, setEditingLocationId] = useState<string | null>(null);
   const [metadataDialogOpen, setMetadataDialogOpen] = useState(false);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [editingAttachmentId, setEditingAttachmentId] = useState<string | null>(null);
@@ -112,10 +132,15 @@ export default function EventModal({
     url: '',
   });
   const [savingLink, setSavingLink] = useState(false);
+  const [footnoteModalOpen, setFootnoteModalOpen] = useState(false);
+  const [editingFootnoteIndex, setEditingFootnoteIndex] = useState<number | null>(null);
+  const descriptionRef = React.useRef<HTMLTextAreaElement>(null);
+  const previousDescriptionRef = React.useRef<string>('');
 
   useEffect(() => {
     if (open) {
       fetchLocations();
+      fetchChains();
       if (eventId) {
         fetchEvent();
         fetchAttachments();
@@ -126,7 +151,7 @@ export default function EventModal({
         setLinks([]);
       }
     }
-  }, [open, eventId]);
+  }, [open, eventId, timelineId]);
 
   const resetForm = () => {
     setFormData({
@@ -136,10 +161,13 @@ export default function EventModal({
       endDateTime: null,
       importance: 3,
       locationId: '',
+      chainIds: [],
+      footnotes: [],
     });
     setError('');
     setAttachments([]);
     setLinks([]);
+    previousDescriptionRef.current = '';
   };
 
   const fetchLocations = async () => {
@@ -154,6 +182,23 @@ export default function EventModal({
     }
   };
 
+  const fetchChains = async () => {
+    if (!timelineId) return;
+
+    try {
+      const response = await fetch(`/api/chains?timelineId=${timelineId}`);
+      if (response.ok) {
+        const data = await response.json();
+        console.log('EventModal - Fetched chains:', data);
+        setChains(data);
+      } else {
+        console.error('EventModal - Failed to fetch chains:', response.status);
+      }
+    } catch (error) {
+      console.error('Error fetching chains:', error);
+    }
+  };
+
   const fetchEvent = async () => {
     if (!eventId) return;
 
@@ -161,14 +206,18 @@ export default function EventModal({
       const response = await fetch(`/api/events/${eventId}`);
       if (response.ok) {
         const event = await response.json();
+        const description = event.description || '';
         setFormData({
           title: event.title,
-          description: event.description || '',
+          description,
           startDateTime: new Date(event.startDateTime),
           endDateTime: event.endDateTime ? new Date(event.endDateTime) : null,
           importance: event.importance,
           locationId: (typeof event.locationId === 'object' ? event.locationId?._id : event.locationId) || '',
+          chainIds: event.chainIds || [],
+          footnotes: event.footnotes || [],
         });
+        previousDescriptionRef.current = description;
       }
     } catch (error) {
       console.error('Error fetching event:', error);
@@ -451,14 +500,207 @@ export default function EventModal({
   };
 
   const handleAddLocation = () => {
+    setEditingLocationId(null);
     setLocationModalOpen(true);
   };
 
+  const handleEditLocation = () => {
+    if (formData.locationId) {
+      setEditingLocationId(formData.locationId);
+      setLocationModalOpen(true);
+    }
+  };
+
   const handleLocationCreated = (location: Location) => {
-    // Add the new location to the list and select it
-    setLocations(prev => [...prev, location]);
+    if (editingLocationId) {
+      // Update existing location in the list
+      setLocations(prev => prev.map(loc => loc._id === location._id ? location : loc));
+    } else {
+      // Add new location to the list and select it
+      setLocations(prev => [...prev, location]);
+    }
     setFormData(prev => ({ ...prev, locationId: location._id }));
     setLocationModalOpen(false);
+    setEditingLocationId(null);
+  };
+
+  const handleAddFootnote = () => {
+    if (!descriptionRef.current) return;
+
+    // Get cursor position
+    const cursorPosition = descriptionRef.current.selectionStart;
+    const description = formData.description;
+
+    // Calculate next footnote number
+    const nextNumber = formData.footnotes.length > 0
+      ? Math.max(...formData.footnotes.map(f => f.number)) + 1
+      : 1;
+
+    // Insert [N] at cursor position
+    const beforeCursor = description.substring(0, cursorPosition);
+    const afterCursor = description.substring(cursorPosition);
+    const newDescription = `${beforeCursor}[${nextNumber}]${afterCursor}`;
+
+    // Update description
+    setFormData(prev => ({ ...prev, description: newDescription }));
+
+    // Set cursor after the inserted marker
+    setTimeout(() => {
+      if (descriptionRef.current) {
+        const newPosition = cursorPosition + `[${nextNumber}]`.length;
+        descriptionRef.current.setSelectionRange(newPosition, newPosition);
+        descriptionRef.current.focus();
+      }
+    }, 0);
+
+    // Open modal to define the footnote
+    setEditingFootnoteIndex(null);
+    setFootnoteModalOpen(true);
+  };
+
+  const handleEditFootnote = (index: number) => {
+    setEditingFootnoteIndex(index);
+    setFootnoteModalOpen(true);
+  };
+
+  const handleSaveFootnote = (footnote: Omit<{
+    number: number;
+    type: 'link' | 'attachment';
+    referenceId: string;
+    pageRange?: string;
+    customSource?: string;
+  }, 'number'>) => {
+    setFormData(prev => {
+      const footnotes = [...prev.footnotes];
+
+      if (editingFootnoteIndex !== null) {
+        // Editing existing footnote - keep the same number
+        footnotes[editingFootnoteIndex] = {
+          ...footnote,
+          number: footnotes[editingFootnoteIndex].number,
+        };
+      } else {
+        // Adding new footnote - assign next number
+        const nextNumber = footnotes.length > 0
+          ? Math.max(...footnotes.map(f => f.number)) + 1
+          : 1;
+        footnotes.push({
+          ...footnote,
+          number: nextNumber,
+        });
+      }
+
+      return { ...prev, footnotes };
+    });
+  };
+
+  const handleDeleteFootnote = (index: number) => {
+    if (!confirm('Are you sure you want to delete this footnote?')) return;
+
+    const deletedNumber = formData.footnotes[index].number;
+
+    setFormData(prev => {
+      const footnotes = [...prev.footnotes];
+      footnotes.splice(index, 1);
+
+      // Renumber remaining footnotes
+      footnotes.forEach((fn, idx) => {
+        fn.number = idx + 1;
+      });
+
+      // Remove the [N] marker from description and renumber remaining markers
+      let newDescription = prev.description;
+
+      // Remove the deleted footnote marker
+      newDescription = newDescription.replace(new RegExp(`\\[${deletedNumber}\\]`, 'g'), '');
+
+      // Renumber all subsequent markers
+      for (let i = deletedNumber + 1; i <= formData.footnotes.length; i++) {
+        newDescription = newDescription.replace(new RegExp(`\\[${i}\\]`, 'g'), `[${i - 1}]`);
+      }
+
+      return { ...prev, footnotes, description: newDescription };
+    });
+  };
+
+  const handleDescriptionChange = (newDescription: string) => {
+    // Check if any footnote markers were deleted
+    const oldMarkers = new Set<number>();
+    const oldRegex = /\[(\d+)\]/g;
+    let match;
+
+    while ((match = oldRegex.exec(formData.description)) !== null) {
+      oldMarkers.add(parseInt(match[1], 10));
+    }
+
+    const newMarkers = new Set<number>();
+    const newRegex = /\[(\d+)\]/g;
+
+    while ((match = newRegex.exec(newDescription)) !== null) {
+      newMarkers.add(parseInt(match[1], 10));
+    }
+
+    // Find which markers were deleted
+    const deletedMarkers = Array.from(oldMarkers).filter(num => !newMarkers.has(num));
+
+    if (deletedMarkers.length > 0) {
+      // Remove footnotes that had their markers deleted
+      setFormData(prev => {
+        let footnotes = prev.footnotes.filter(fn => !deletedMarkers.includes(fn.number));
+
+        // Get remaining markers in order they appear in text
+        const remainingMarkers: number[] = [];
+        const regex = /\[(\d+)\]/g;
+        let m;
+        while ((m = regex.exec(newDescription)) !== null) {
+          remainingMarkers.push(parseInt(m[1], 10));
+        }
+
+        // Create mapping from old numbers to new sequential numbers
+        const uniqueMarkers = Array.from(new Set(remainingMarkers)).sort((a, b) => a - b);
+        const numberMap: Record<number, number> = {};
+        uniqueMarkers.forEach((oldNum, idx) => {
+          numberMap[oldNum] = idx + 1;
+        });
+
+        // Renumber footnotes
+        footnotes.forEach(fn => {
+          if (numberMap[fn.number] !== undefined) {
+            fn.number = numberMap[fn.number];
+          }
+        });
+
+        // Renumber markers in description (replace in reverse order to avoid conflicts)
+        let updatedDescription = newDescription;
+        uniqueMarkers.reverse().forEach(oldNum => {
+          const newNum = numberMap[oldNum];
+          if (oldNum !== newNum) {
+            updatedDescription = updatedDescription.replace(new RegExp(`\\[${oldNum}\\]`, 'g'), `[TMP${oldNum}]`);
+          }
+        });
+
+        // Replace temporary markers with final numbers
+        uniqueMarkers.forEach(oldNum => {
+          const newNum = numberMap[oldNum];
+          if (oldNum !== newNum) {
+            updatedDescription = updatedDescription.replace(new RegExp(`\\[TMP${oldNum}\\]`, 'g'), `[${newNum}]`);
+          }
+        });
+
+        return { ...prev, footnotes, description: updatedDescription };
+      });
+    } else {
+      setFormData(prev => ({ ...prev, description: newDescription }));
+    }
+
+    previousDescriptionRef.current = newDescription;
+  };
+
+  const handleDescriptionKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if ((e.key === '[' || e.key === ']') && eventId) {
+      e.preventDefault();
+      handleAddFootnote();
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -478,6 +720,8 @@ export default function EventModal({
         startDateTime: formData.startDateTime.toISOString(),
         endDateTime: formData.endDateTime?.toISOString() || null,
         locationId: formData.locationId || null,
+        chainIds: formData.chainIds,
+        footnotes: formData.footnotes,
       };
 
       const url = eventId ? `/api/events/${eventId}` : '/api/events';
@@ -494,9 +738,11 @@ export default function EventModal({
         onClose();
       } else {
         const data = await response.json();
+        console.error('Failed to save event:', data);
         setError(data.error || 'Failed to save event');
       }
     } catch (error) {
+      console.error('Error saving event:', error);
       setError('Error saving event');
     } finally {
       setLoading(false);
@@ -527,14 +773,29 @@ export default function EventModal({
                 onChange={(e) => setFormData({ ...formData, title: e.target.value })}
               />
 
-              <TextField
-                fullWidth
-                multiline
-                rows={3}
-                label="Description"
-                value={formData.description}
-                onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-              />
+              <Box>
+                <TextField
+                  fullWidth
+                  multiline
+                  rows={3}
+                  label="Description"
+                  value={formData.description}
+                  onChange={(e) => handleDescriptionChange(e.target.value)}
+                  onKeyDown={handleDescriptionKeyDown}
+                  inputRef={descriptionRef}
+                  helperText={eventId ? "Type '[' or ']' to add a footnote" : undefined}
+                />
+                {eventId && (
+                  <Button
+                    size="small"
+                    startIcon={<FormatQuote />}
+                    onClick={handleAddFootnote}
+                    sx={{ mt: 0.5 }}
+                  >
+                    Add Footnote at Cursor
+                  </Button>
+                )}
+              </Box>
 
               <DateTimePicker
                 label="Start Date & Time"
@@ -589,6 +850,26 @@ export default function EventModal({
                   </Select>
                 </FormControl>
                 <IconButton
+                  onClick={handleEditLocation}
+                  disabled={!formData.locationId}
+                  sx={{
+                    color: 'primary.main',
+                    border: '1px solid',
+                    borderColor: 'primary.main',
+                    '&:hover': {
+                      backgroundColor: 'primary.main',
+                      color: 'primary.contrastText',
+                    },
+                    '&.Mui-disabled': {
+                      borderColor: 'action.disabled',
+                      color: 'action.disabled',
+                    },
+                  }}
+                  title="Edit selected location"
+                >
+                  <Edit />
+                </IconButton>
+                <IconButton
                   onClick={handleAddLocation}
                   sx={{
                     color: 'primary.main',
@@ -599,10 +880,68 @@ export default function EventModal({
                       color: 'primary.contrastText',
                     },
                   }}
+                  title="Add new location"
                 >
                   <Add />
                 </IconButton>
               </Box>
+
+              <Autocomplete
+                multiple
+                options={chains}
+                getOptionLabel={(option) => option.name}
+                value={chains.filter(chain => formData.chainIds.includes(chain._id))}
+                onChange={(_, newValue) => {
+                  setFormData({ ...formData, chainIds: newValue.map(chain => chain._id) });
+                }}
+                renderInput={(params) => (
+                  <TextField
+                    {...params}
+                    label="Event Chains (Optional)"
+                    placeholder="Select chains..."
+                  />
+                )}
+                renderTags={(value, getTagProps) =>
+                  value.map((option, index) => (
+                    <Chip
+                      {...getTagProps({ index })}
+                      key={option._id}
+                      label={option.name}
+                      sx={{
+                        backgroundColor: option.color,
+                        color: '#fff',
+                        '& .MuiChip-deleteIcon': {
+                          color: 'rgba(255, 255, 255, 0.7)',
+                          '&:hover': {
+                            color: '#fff',
+                          },
+                        },
+                      }}
+                    />
+                  ))
+                }
+              />
+
+              {/* Manage Existing Footnotes */}
+              {formData.footnotes.length > 0 && (
+                <Box sx={{ mt: 1 }}>
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+                    Manage Footnotes:
+                  </Typography>
+                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                    {formData.footnotes.map((footnote, index) => (
+                      <Chip
+                        key={index}
+                        label={`[${footnote.number}]`}
+                        size="small"
+                        onDelete={() => handleDeleteFootnote(index)}
+                        onClick={() => handleEditFootnote(index)}
+                        sx={{ cursor: 'pointer' }}
+                      />
+                    ))}
+                  </Box>
+                </Box>
+              )}
 
               {/* File Attachments Section */}
               <Box sx={{ mt: 2 }}>
@@ -831,8 +1170,12 @@ export default function EventModal({
         {/* Location Creation Modal */}
         <LocationModal
           open={locationModalOpen}
-          onClose={() => setLocationModalOpen(false)}
+          onClose={() => {
+            setLocationModalOpen(false);
+            setEditingLocationId(null);
+          }}
           onLocationCreated={handleLocationCreated}
+          locationId={editingLocationId || undefined}
         />
 
         {/* Attachment Metadata Dialog */}
@@ -969,6 +1312,19 @@ export default function EventModal({
             </Button>
           </DialogActions>
         </Dialog>
+
+        {/* Footnote Modal */}
+        <FootnoteModal
+          open={footnoteModalOpen}
+          onClose={() => {
+            setFootnoteModalOpen(false);
+            setEditingFootnoteIndex(null);
+          }}
+          onSave={handleSaveFootnote}
+          attachments={attachments}
+          links={links}
+          editingFootnote={editingFootnoteIndex !== null ? formData.footnotes[editingFootnoteIndex] : null}
+        />
       </Dialog>
     </LocalizationProvider>
   );

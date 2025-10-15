@@ -731,66 +731,8 @@ export default function MapPanel({ timelineId, selectedItems, onSelection, onAdd
               );
             })}
 
-          {/* Standalone Location Markers */}
-          {locations
-            .filter(location => location.latitude && location.longitude)
-            .filter(location =>
-              !events.some(event => event.locationId?._id === location._id) &&
-              !entities.some(entity => entity.locationId?._id === location._id)
-            )
-            .map((location) => {
-              const isSelected = isLocationSelected(location._id);
-
-              return (
-                <React.Fragment key={`location-${location._id}`}>
-                  <Marker
-                    position={[location.latitude, location.longitude]}
-                    eventHandlers={{
-                      click: (e) => {
-                        handleLocationMarkerClick(location._id, e.originalEvent.shiftKey);
-                      },
-                    }}
-                  >
-                    <Popup>
-                      <Box>
-                        <Typography variant="subtitle2" sx={{ fontWeight: 'bold' }}>
-                          {location.name}
-                        </Typography>
-                        {location.streetAddress && (
-                          <Typography variant="body2">
-                            {location.streetAddress}
-                          </Typography>
-                        )}
-                        {location.city && location.stateProvince && (
-                          <Typography variant="body2">
-                            {location.city}, {location.stateProvince}
-                          </Typography>
-                        )}
-                        {location.description && (
-                          <Typography variant="caption" display="block" sx={{ mt: 1 }}>
-                            {location.description}
-                          </Typography>
-                        )}
-                      </Box>
-                    </Popup>
-                  </Marker>
-
-                  {/* Location radius circle */}
-                  {location.radius && (
-                    <Circle
-                      center={[location.latitude, location.longitude]}
-                      radius={location.radius}
-                      pathOptions={{
-                        fillColor: '#2196F3',
-                        fillOpacity: isSelected ? 0.3 : 0.1,
-                        color: '#2196F3',
-                        weight: isSelected ? 3 : 1,
-                      }}
-                    />
-                  )}
-                </React.Fragment>
-              );
-            })}
+          {/* Standalone Location Markers - Only show locations not attached to any visible event or entity */}
+          {/* Removed: Only locations attached to visible events or entities should be shown */}
           </MapContainer>
         ) : (
           <Box sx={{

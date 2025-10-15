@@ -36,7 +36,34 @@ export async function GET(request: NextRequest) {
       .populate('locationId')
       .sort({ startDateTime: 1 });
 
-    return NextResponse.json(events);
+    console.log('GET events - sample chainIds:', events[0]?.chainIds);
+
+    // Ensure chainIds and footnotes exist for backward compatibility with old events
+    const eventsData = events.map(event => {
+      const eventObj = event.toObject();
+      if (!eventObj.chainIds) {
+        eventObj.chainIds = [];
+      }
+      if (!eventObj.footnotes) {
+        eventObj.footnotes = [];
+      }
+
+      // Convert ObjectIds to strings in footnotes for proper serialization
+      if (eventObj.footnotes && eventObj.footnotes.length > 0) {
+        eventObj.footnotes = eventObj.footnotes.map((fn: any) => ({
+          number: fn.number,
+          type: fn.type,
+          referenceId: fn.referenceId.toString(),
+          pageRange: fn.pageRange,
+          customSource: fn.customSource,
+          date: fn.date,
+        }));
+      }
+
+      return eventObj;
+    });
+
+    return NextResponse.json(eventsData);
   } catch (error) {
     console.error('Error fetching events:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
@@ -58,6 +85,8 @@ export async function POST(request: NextRequest) {
       importance,
       locationId,
       timelineId,
+      chainIds,
+      footnotes,
     } = await request.json();
 
     if (!title?.trim() || !startDateTime || !timelineId) {
@@ -87,12 +116,38 @@ export async function POST(request: NextRequest) {
       importance: Math.max(1, Math.min(5, importance || 3)),
       locationId: locationId || undefined,
       timelineId,
+      chainIds: Array.isArray(chainIds) ? chainIds : [],
+      footnotes: Array.isArray(footnotes) ? footnotes : [],
       createdBy: session.user.id,
     });
 
     const populatedEvent = await Event.findById(event._id).populate('locationId');
 
-    return NextResponse.json(populatedEvent, { status: 201 });
+    console.log('Created event with chainIds:', populatedEvent?.chainIds);
+
+    // Ensure chainIds and footnotes exist in response
+    const eventData = populatedEvent?.toObject();
+    if (eventData) {
+      if (!eventData.chainIds) {
+        eventData.chainIds = [];
+      }
+      if (!eventData.footnotes) {
+        eventData.footnotes = [];
+      }
+
+      // Convert ObjectIds to strings in footnotes for proper serialization
+      if (eventData.footnotes && eventData.footnotes.length > 0) {
+        eventData.footnotes = eventData.footnotes.map((fn: any) => ({
+          number: fn.number,
+          type: fn.type,
+          referenceId: fn.referenceId.toString(),
+          pageRange: fn.pageRange,
+          customSource: fn.customSource,
+        }));
+      }
+    }
+
+    return NextResponse.json(eventData, { status: 201 });
   } catch (error) {
     console.error('Error creating event:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });

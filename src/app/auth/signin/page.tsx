@@ -101,7 +101,7 @@ export default function SignInPage() {
                 Sign In
               </Typography>
               <Typography variant="body2" align="center" color="text.secondary" sx={{ mb: 3 }}>
-                Timeliner - Create Annotated Timelines
+                Lucidio - Create Annotated Timelines
               </Typography>
 
               {error && (

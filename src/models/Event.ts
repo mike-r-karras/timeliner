@@ -1,5 +1,14 @@
 import mongoose, { Document, Schema } from 'mongoose';
 
+interface IFootnote {
+  number: number;
+  type: 'link' | 'attachment';
+  referenceId: string;
+  pageRange?: string;
+  customSource?: string;
+  date?: string;
+}
+
 export interface IEvent extends Document {
   _id: string;
   title: string;
@@ -10,6 +19,8 @@ export interface IEvent extends Document {
   thumbnailUrl?: string;
   locationId?: string;
   timelineId: string;
+  chainIds?: string[];
+  footnotes?: IFootnote[];
   createdBy: string;
   createdAt: Date;
   updatedAt: Date;
@@ -51,6 +62,22 @@ const EventSchema = new Schema<IEvent>(
       type: Schema.Types.ObjectId,
       ref: 'Timeline',
       required: true,
+    },
+    chainIds: {
+      type: [Schema.Types.ObjectId],
+      ref: 'Chain',
+      default: [],
+    },
+    footnotes: {
+      type: [{
+        number: { type: Number, required: true },
+        type: { type: String, enum: ['link', 'attachment'], required: true },
+        referenceId: { type: Schema.Types.ObjectId, required: true },
+        pageRange: { type: String },
+        customSource: { type: String },
+        date: { type: String },
+      }],
+      default: [],
     },
     createdBy: {
       type: Schema.Types.ObjectId,

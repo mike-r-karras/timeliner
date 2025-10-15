@@ -94,6 +94,18 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Timeline not found' }, { status: 404 });
     }
 
+    // Check if entity with same name and type already exists in this timeline
+    const existingEntity = await Entity.findOne({
+      name: name.trim(),
+      type,
+      timelineId,
+    });
+
+    if (existingEntity) {
+      console.log(`Entity already exists: ${existingEntity.name} (${existingEntity.type}) - returning existing entity`);
+      return NextResponse.json(existingEntity, { status: 200 });
+    }
+
     const entity = await Entity.create({
       name: name.trim(),
       type,

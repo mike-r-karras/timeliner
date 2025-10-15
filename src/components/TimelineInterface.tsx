@@ -366,6 +366,7 @@ export default function TimelineInterface({ userId }: TimelineInterfaceProps) {
             onEditEvent={handleEditEvent}
             onAddEvent={handleAddEvent}
             refreshTrigger={refreshTrigger}
+            onRefresh={triggerRefresh}
             onVisibleEventsChange={setVisibleEventIds}
             mapReady={mapReady}
           />

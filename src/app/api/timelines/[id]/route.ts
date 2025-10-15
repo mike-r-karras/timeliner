@@ -38,7 +38,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const { title, description } = await request.json();
+    const { title, description, timezone } = await request.json();
 
     await dbConnect();
 
@@ -48,6 +48,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       {
         ...(title !== undefined && { title: title.trim() }),
         ...(description !== undefined && { description: description?.trim() }),
+        ...(timezone !== undefined && { timezone: timezone.trim() }),
       },
       { new: true }
     );
