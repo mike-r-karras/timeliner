@@ -59,5 +59,7 @@ const EntitySchema = new Schema<IEntity>(
 
 EntitySchema.index({ timelineId: 1 });
 EntitySchema.index({ name: 1 });
+// Prevent duplicate entities within the same timeline
+EntitySchema.index({ timelineId: 1, name: 1 }, { unique: true });
 
 export default mongoose.models.Entity || mongoose.model<IEntity>('Entity', EntitySchema);

@@ -102,6 +102,11 @@ export default function MapPanel({ timelineId, selectedItems, onSelection, onAdd
     }
   };
 
+  // Debug: Log when visibleEventIds prop changes
+  useEffect(() => {
+    console.log('[MapPanel] visibleEventIds prop updated:', visibleEventIds);
+  }, [visibleEventIds]);
+
   useEffect(() => {
     // Fix Leaflet marker icons and set client ready after Leaflet loads
     if (typeof window !== 'undefined') {
@@ -137,6 +142,7 @@ export default function MapPanel({ timelineId, selectedItems, onSelection, onAdd
     clientLog('Entities data:', entities.slice(0, 2)); // Show first 2 entities
     clientLog('Selected items:', selectedItems);
     clientLog('Filtered entity IDs:', filteredEntityIds);
+    clientLog('Visible event IDs:', visibleEventIds);
 
     if (events.length === 0 && entities.length === 0) {
       clientLog('No events or entities, returning null');
@@ -177,6 +183,13 @@ export default function MapPanel({ timelineId, selectedItems, onSelection, onAdd
       if (entities[0]?.locationId) {
         clientLog('First entity location details:', entities[0].locationId);
       }
+    }
+
+    // Apply visible events filter if provided
+    if (visibleEventIds && visibleEventIds.length > 0) {
+      clientLog('Applying visible events filter:', visibleEventIds);
+      eventsToShow = eventsToShow.filter(event => visibleEventIds.includes(event._id));
+      clientLog('After visible events filter - events:', eventsToShow.length);
     }
 
     // Apply entity filter if provided
@@ -251,7 +264,7 @@ export default function MapPanel({ timelineId, selectedItems, onSelection, onAdd
       center: [centerLat, centerLng] as [number, number],
       zoom
     };
-  }, [events, entities, selectedItems?.events, selectedItems?.entities, filteredEntityIds]);
+  }, [events, entities, selectedItems?.events, selectedItems?.entities, filteredEntityIds, visibleEventIds]);
 
   // Update map when bounds change
   useEffect(() => {

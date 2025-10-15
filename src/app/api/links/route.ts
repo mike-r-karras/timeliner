@@ -17,9 +17,10 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const eventId = searchParams.get('eventId');
     const entityId = searchParams.get('entityId');
+    const timelineId = searchParams.get('timelineId');
 
-    if (!eventId && !entityId) {
-      return NextResponse.json({ error: 'Event ID or Entity ID is required' }, { status: 400 });
+    if (!eventId && !entityId && !timelineId) {
+      return NextResponse.json({ error: 'Event ID, Entity ID, or Timeline ID is required' }, { status: 400 });
     }
 
     await dbConnect();
@@ -47,7 +48,7 @@ export async function GET(request: NextRequest) {
       }));
 
       return NextResponse.json(links);
-    } else {
+    } else if (entityId) {
       const entity = await Entity.findOne({
         _id: entityId,
         createdBy: session.user.id,
@@ -69,6 +70,41 @@ export async function GET(request: NextRequest) {
       }));
 
       return NextResponse.json(links);
+    } else if (timelineId) {
+      // Fetch all events in the timeline
+      const events = await Event.find({
+        timelineId,
+        createdBy: session.user.id,
+      });
+
+      if (events.length === 0) {
+        return NextResponse.json({});
+      }
+
+      const eventIds = events.map(e => e._id);
+
+      // Find all links for these events
+      const linkLinks = await LinkLink.find({
+        eventId: { $in: eventIds }
+      })
+        .populate('linkId')
+        .sort({ createdAt: -1 });
+
+      // Group by eventId
+      const linksByEvent: Record<string, any[]> = {};
+      linkLinks.forEach(linkLink => {
+        const evtId = String(linkLink.eventId);
+        if (!linksByEvent[evtId]) {
+          linksByEvent[evtId] = [];
+        }
+        linksByEvent[evtId].push({
+          _id: linkLink.linkId._id,
+          title: linkLink.linkId.title,
+          url: linkLink.linkId.url,
+        });
+      });
+
+      return NextResponse.json(linksByEvent);
     }
   } catch (error) {
     console.error('Error fetching links:', error);

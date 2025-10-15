@@ -45,6 +45,15 @@ interface SelectedItems {
   locations: string[];
 }
 
+interface Connection {
+  _id: string;
+  type: 'event-entity' | 'event-event' | 'entity-entity';
+  sourceId: any;
+  targetId: any;
+  sourceModel: 'Event' | 'Entity';
+  targetModel: 'Event' | 'Entity';
+}
+
 interface EntitiesPanelProps {
   timelineId?: string | null;
   selectedItems?: SelectedItems;
@@ -53,6 +62,7 @@ interface EntitiesPanelProps {
   onAddEntity?: () => void;
   refreshTrigger?: number;
   onEntitiesFiltered?: (entityIds: string[]) => void;
+  visibleEventIds?: string[];
 }
 
 const getEntityTypeColor = (type: string) => {
@@ -72,20 +82,19 @@ const getEntityTypeColor = (type: string) => {
   }
 };
 
-export default function EntitiesPanel({ timelineId, selectedItems, onSelection, onEditEntity, onAddEntity, refreshTrigger, onEntitiesFiltered }: EntitiesPanelProps) {
+export default function EntitiesPanel({ timelineId, selectedItems, onSelection, onEditEntity, onAddEntity, refreshTrigger, onEntitiesFiltered, visibleEventIds }: EntitiesPanelProps) {
   const [loading, setLoading] = useState(false);
   const [entities, setEntities] = useState<Entity[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [entityAttachments, setEntityAttachments] = useState<Record<string, Attachment[]>>({});
   const [viewerOpen, setViewerOpen] = useState(false);
   const [selectedAttachment, setSelectedAttachment] = useState<Attachment | null>(null);
+  const [connections, setConnections] = useState<Connection[]>([]);
 
   // Delete confirmation state
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [entityToDelete, setEntityToDelete] = useState<Entity | null>(null);
   const [deleting, setDeleting] = useState(false);
-
-  // Local connection state
 
   useEffect(() => {
     if (timelineId) {
@@ -96,28 +105,29 @@ export default function EntitiesPanel({ timelineId, selectedItems, onSelection, 
   const fetchEntities = async () => {
     setLoading(true);
     try {
-      const response = await fetch(`/api/entities?timelineId=${timelineId}`);
-      if (response.ok) {
-        const data = await response.json();
-        setEntities(data);
+      const [entitiesResponse, attachmentsResponse, connectionsResponse] = await Promise.all([
+        fetch(`/api/entities?timelineId=${timelineId}`),
+        fetch(`/api/attachments?timelineId=${timelineId}&type=entities`),
+        fetch(`/api/connections?timelineId=${timelineId}`)
+      ]);
 
-        // Fetch attachments for each entity
-        const attachmentsMap: Record<string, Attachment[]> = {};
-        for (const entity of data) {
-          try {
-            const attachResponse = await fetch(`/api/attachments?entityId=${entity._id}`);
-            if (attachResponse.ok) {
-              const attachments = await attachResponse.json();
-              attachmentsMap[entity._id] = attachments;
-            }
-          } catch (error) {
-            console.error(`Error fetching attachments for entity ${entity._id}:`, error);
-          }
-        }
-        setEntityAttachments(attachmentsMap);
+      if (entitiesResponse.ok) {
+        const data = await entitiesResponse.json();
+        setEntities(data);
+      }
+
+      if (attachmentsResponse.ok) {
+        const attachmentsByEntity = await attachmentsResponse.json();
+        setEntityAttachments(attachmentsByEntity);
+      }
+
+      if (connectionsResponse.ok) {
+        const connectionsData = await connectionsResponse.json();
+        setConnections(connectionsData);
+        console.log('[EntitiesPanel] Fetched connections:', connectionsData.length);
       }
     } catch (error) {
-      console.error('Error fetching entities:', error);
+      console.error('Error fetching entities data:', error);
     } finally {
       setLoading(false);
     }
@@ -178,18 +188,69 @@ export default function EntitiesPanel({ timelineId, selectedItems, onSelection, 
     setEntityToDelete(null);
   };
 
-  const filteredEntities = entities.filter(entity =>
+  // Filter entities by visibility (connected to visible events)
+  const visibilityFilteredEntities = React.useMemo(() => {
+    // If no visible events specified, show all entities
+    if (!visibleEventIds || visibleEventIds.length === 0) {
+      return entities;
+    }
+
+    // Find entity IDs that are connected to visible events
+    const connectedEntityIds = new Set<string>();
+
+    connections.forEach((conn) => {
+      // Skip if sourceId or targetId is null (deleted item)
+      if (!conn.sourceId || !conn.targetId) return;
+
+      const sourceIdStr = typeof conn.sourceId === 'object' ? conn.sourceId._id : conn.sourceId;
+      const targetIdStr = typeof conn.targetId === 'object' ? conn.targetId._id : conn.targetId;
+
+      // Skip if we couldn't extract IDs
+      if (!sourceIdStr || !targetIdStr) return;
+
+      // If source is a visible event and target is an entity
+      if (conn.sourceModel === 'Event' && conn.targetModel === 'Entity' && visibleEventIds.includes(sourceIdStr)) {
+        connectedEntityIds.add(targetIdStr);
+      }
+      // If target is a visible event and source is an entity
+      if (conn.targetModel === 'Event' && conn.sourceModel === 'Entity' && visibleEventIds.includes(targetIdStr)) {
+        connectedEntityIds.add(sourceIdStr);
+      }
+    });
+
+    console.log('[EntitiesPanel] Visible events:', visibleEventIds.length, 'Connected entities:', connectedEntityIds.size);
+
+    // Filter to only entities connected to visible events
+    return entities.filter(entity => connectedEntityIds.has(entity._id));
+  }, [entities, connections, visibleEventIds]);
+
+  // Filter by search term
+  const filteredEntities = visibilityFilteredEntities.filter(entity =>
     entity.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
     entity.description?.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  // Notify parent component when entities are filtered
+  // Notify parent component when entities are filtered (both by visibility and search)
+  const filteredEntityIds = React.useMemo(() =>
+    filteredEntities.map(entity => entity._id),
+    [filteredEntities]
+  );
+
+  const prevFilteredEntityIdsRef = React.useRef<string[]>([]);
+
   useEffect(() => {
     if (onEntitiesFiltered) {
-      const filteredIds = filteredEntities.map(entity => entity._id);
-      onEntitiesFiltered(filteredIds);
+      // Only call if the IDs have actually changed
+      const idsChanged =
+        filteredEntityIds.length !== prevFilteredEntityIdsRef.current.length ||
+        filteredEntityIds.some((id, index) => id !== prevFilteredEntityIdsRef.current[index]);
+
+      if (idsChanged) {
+        prevFilteredEntityIdsRef.current = filteredEntityIds;
+        onEntitiesFiltered(filteredEntityIds);
+      }
     }
-  }, [entities, searchTerm, onEntitiesFiltered]);
+  }, [filteredEntityIds, onEntitiesFiltered]);
 
   if (loading) {
     return (
@@ -263,7 +324,9 @@ export default function EntitiesPanel({ timelineId, selectedItems, onSelection, 
             <Typography color="text.secondary">
               {entities.length === 0
                 ? 'No entities in this timeline. Click the + button to add entities.'
-                : 'No entities match your search.'
+                : visibleEventIds && visibleEventIds.length > 0 && visibilityFilteredEntities.length === 0
+                  ? 'No entities connected to visible events.'
+                  : 'No entities match your search.'
               }
             </Typography>
           </Box>

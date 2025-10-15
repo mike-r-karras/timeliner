@@ -92,5 +92,7 @@ const EventSchema = new Schema<IEvent>(
 
 EventSchema.index({ timelineId: 1, startDateTime: 1 });
 EventSchema.index({ startDateTime: 1 });
+// Prevent duplicate events within the same timeline
+EventSchema.index({ timelineId: 1, title: 1, startDateTime: 1 }, { unique: true });
 
 export default mongoose.models.Event || mongoose.model<IEvent>('Event', EventSchema);

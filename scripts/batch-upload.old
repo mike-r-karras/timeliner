@@ -1,0 +1,53 @@
+  // batch-upload.js
+  const fs = require('fs');
+  const path = require('path');
+  const FormData = require('form-data');
+  const fetch = require('node-fetch');
+
+// Ensure fetch is available
+if (typeof fetch === 'undefined') {
+  global.fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
+}
+  async function uploadFile(filePath, timelineId, sessionCookie) {
+    const form = new FormData();
+    form.append('file', fs.createReadStream(filePath));
+    form.append('timelineId', timelineId);
+
+    const response = await fetch('http://localhost:3000/api/parse-file', {
+      method: 'POST',
+      headers: { 'Cookie': sessionCookie },
+      body: form
+    });
+
+    return { file: path.basename(filePath), status: response.status };
+  }
+
+  async function batchUpload(directory, timelineId, sessionCookie, concurrency = 3) {
+    const files = fs.readdirSync(directory).filter(f => f.endsWith('.md'));
+    console.log(`Found ${files.length} files to upload in ${directory}.`);
+    console.log(`Files: ${files.join(', ')}`);
+    for (let i = 0; i < files.length; i += concurrency) {
+      const batch = files.slice(i, i + concurrency);
+
+      const results = await Promise.all(
+        batch.map(async f => {
+          try {
+            const result = await uploadFile(path.join(directory, f), timelineId, sessionCookie);
+            console.log(`✓ ${f}: ${result.status === 200 ? 'Success' : 'Failed'}`);
+            return result;
+          } catch (error) {
+            console.error(`✗ ${f}: ${error.message}`);
+            return { file: f, error: error.message };
+          }
+        })
+      );
+
+      console.log(`Progress: ${i + batch.length}/${files.length}`);
+    }
+  }
+  
+  // Usage:eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..N_83xp1_2hvNdr77.J_Cran6C6wo54QXq2OgxfIEiu_5gZMey_Be1QLpBsLMVwrN_eVY9g1W9qS9ND3DWw6uu5cl-gf80xo8Zkq8dbEJwyG9qm2bPBCHYUo2kPFsdK5rOghh9coXx45elyr56C5zxwHWlA1-Pv4hvwYZaqm4vKbpKfsQlm_nqY3o6CHfYU03Zca1IDa1SMrNicJQinaw.nSN9axV-PQWTptjdDFHDVw
+  console.log('Starting batch upload...');
+  const sessionCookie = 'next-auth.session-token=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..N_83xp1_2hvNdr77.J_Cran6C6wo54QXq2OgxfIEiu_5gZMey_Be1QLpBsLMVwrN_eVY9g1W9qS9ND3DWw6uu5cl-gf80xo8Zkq8dbEJwyG9qm2bPBCHYUo2kPFsdK5rOghh9coXx45elyr56C5zxwHWlA1-Pv4hvwYZaqm4vKbpKfsQlm_nqY3o6CHfYU03Zca1IDa1SMrNicJQinaw.nSN9axV-PQWTptjdDFHDVw';
+  batchUpload('../../timeline-of-terror/timelines/key-events', '68dd6c01f4b076fb062e237c', sessionCookie);
+  console.log('Batch upload complete.');

@@ -133,6 +133,7 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
   const headerRef = React.useRef<HTMLDivElement>(null);
   const expandRef = React.useRef<HTMLDivElement>(null);
   const [availableHeight, setAvailableHeight] = useState(0);
+  const [visibleEventIds, setVisibleEventIds] = useState<string[]>([]);
 
   // URL parsing state
   const [quickAddUrl, setQuickAddUrl] = useState('');
@@ -307,6 +308,7 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
         });
 
         if (visible.length > 0) {
+          setVisibleEventIds(visible);
           onVisibleEventsChange(visible);
         }
       }
@@ -416,19 +418,56 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
 
   // Track visible events using Intersection Observer
   useEffect(() => {
-    if (!timelineScrollRef.current || !onVisibleEventsChange || events.length === 0) return;
+    console.log('[IntersectionObserver] useEffect triggered', {
+      hasScrollRef: !!timelineScrollRef.current,
+      hasCallback: !!onVisibleEventsChange,
+      eventCount: events.length,
+      isClient,
+      heightReady,
+      scrollRestored
+    });
 
-    // Use a ref to persist visible event IDs across observer callbacks
-    const visibleEventIdsRef = { current: new Set<string>() };
+    if (!onVisibleEventsChange || events.length === 0 || !isClient || !heightReady) {
+      console.log('[IntersectionObserver] Skipping setup - missing requirements');
+      return;
+    }
 
-    // Create intersection observer
-    const observer = new IntersectionObserver(
+    // Retry mechanism to wait for ref to be available
+    let attempts = 0;
+    const maxAttempts = 10;
+    let timeoutId: NodeJS.Timeout;
+
+    const trySetupObserver = () => {
+      attempts++;
+      console.log(`[IntersectionObserver] Attempt ${attempts}/${maxAttempts} - checking ref`, {
+        hasScrollRef: !!timelineScrollRef.current
+      });
+
+      if (!timelineScrollRef.current) {
+        if (attempts < maxAttempts) {
+          console.log('[IntersectionObserver] Ref not available, retrying in 100ms');
+          timeoutId = setTimeout(trySetupObserver, 100);
+          return;
+        } else {
+          console.log('[IntersectionObserver] Ref not available after max attempts');
+          return;
+        }
+      }
+
+      // Use a ref to persist visible event IDs across observer callbacks
+      const visibleEventIdsRef = { current: new Set<string>() };
+
+      // Create intersection observer
+      const observer = new IntersectionObserver(
       (entries) => {
+        console.log('[IntersectionObserver] Callback triggered with', entries.length, 'entries');
         let hasChanges = false;
 
         entries.forEach((entry) => {
           const eventId = entry.target.getAttribute('data-event-id');
           if (!eventId) return;
+
+          console.log('[IntersectionObserver]', eventId, 'isIntersecting:', entry.isIntersecting);
 
           if (entry.isIntersecting) {
             if (!visibleEventIdsRef.current.has(eventId)) {
@@ -445,7 +484,10 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
 
         // Only notify if there were changes
         if (hasChanges) {
-          onVisibleEventsChange(Array.from(visibleEventIdsRef.current));
+          const visibleIds = Array.from(visibleEventIdsRef.current);
+          console.log('[IntersectionObserver] Visible IDs updated:', visibleIds);
+          setVisibleEventIds(visibleIds);
+          onVisibleEventsChange(visibleIds);
         }
       },
       {
@@ -455,17 +497,35 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
       }
     );
 
-    // Observe all event cards
-    const eventElements = timelineScrollRef.current.querySelectorAll('[data-event-id]');
-    eventElements.forEach((element) => {
-      observer.observe(element);
-    });
+      // Observe all event cards
+      const eventElements = timelineScrollRef.current.querySelectorAll('[data-event-id]');
+      console.log('[IntersectionObserver] Found', eventElements.length, 'event elements to observe');
+      eventElements.forEach((element) => {
+        observer.observe(element);
+      });
+
+      // Store observer in a way that cleanup can access it
+      (timelineScrollRef.current as any).__observer = observer;
+      console.log('[IntersectionObserver] Setup complete!');
+    };
+
+    // Start trying to set up the observer
+    trySetupObserver();
 
     // Cleanup
     return () => {
-      observer.disconnect();
+      console.log('[IntersectionObserver] Cleanup - canceling timeout and disconnecting observer');
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+
+      // Disconnect observer if it was created
+      if (timelineScrollRef.current && (timelineScrollRef.current as any).__observer) {
+        (timelineScrollRef.current as any).__observer.disconnect();
+        delete (timelineScrollRef.current as any).__observer;
+      }
     };
-  }, [events, onVisibleEventsChange]); // Only re-run when events or callback changes
+  }, [events, onVisibleEventsChange, isClient, heightReady]); // Re-run when events, callback, or DOM readiness changes
 
   // Maintain center focus when zoom level changes (but not during initial restoration)
   useEffect(() => {
@@ -535,32 +595,25 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
         clientLog('Fetched events with chainIds:', sortedEvents.map((e: Event) => ({ title: e.title, chainIds: e.chainIds })));
         setEvents(sortedEvents);
 
-        // Fetch attachments and links for each event
-        const attachmentsMap: Record<string, Attachment[]> = {};
-        const linksMap: Record<string, Link[]> = {};
-        for (const event of sortedEvents) {
-          try {
-            const attachResponse = await fetch(`/api/attachments?eventId=${event._id}`);
-            if (attachResponse.ok) {
-              const attachments = await attachResponse.json();
-              attachmentsMap[event._id] = attachments;
-            }
-          } catch (error) {
-            clientLog(`Error fetching attachments for event ${event._id}:`, error);
+        // Fetch all attachments and links for the entire timeline at once
+        try {
+          const [attachmentsResponse, linksResponse] = await Promise.all([
+            fetch(`/api/attachments?timelineId=${timelineId}`),
+            fetch(`/api/links?timelineId=${timelineId}`)
+          ]);
+
+          if (attachmentsResponse.ok) {
+            const attachmentsByEvent = await attachmentsResponse.json();
+            setEventAttachments(attachmentsByEvent);
           }
 
-          try {
-            const linksResponse = await fetch(`/api/links?eventId=${event._id}`);
-            if (linksResponse.ok) {
-              const links = await linksResponse.json();
-              linksMap[event._id] = links;
-            }
-          } catch (error) {
-            clientLog(`Error fetching links for event ${event._id}:`, error);
+          if (linksResponse.ok) {
+            const linksByEvent = await linksResponse.json();
+            setEventLinks(linksByEvent);
           }
+        } catch (error) {
+          clientLog('Error fetching attachments/links:', error);
         }
-        setEventAttachments(attachmentsMap);
-        setEventLinks(linksMap);
       }
     } catch (error) {
       clientLog('Error fetching timeline data:', error);
@@ -661,12 +714,112 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
     setSelectedAttachment(null);
   };
 
+  // Footnote chip component with explicit hover state
+  const FootnoteChip: React.FC<{
+    displayText: string;
+    onClick: () => void;
+    eventId: string;
+    footnoteNumber: number;
+    matchIndex: number;
+  }> = ({ displayText, onClick, eventId, footnoteNumber, matchIndex }) => {
+    const [isHovered, setIsHovered] = React.useState(false);
+
+    console.log(`[FootnoteChip RENDER] Event: ${eventId}, Footnote: ${footnoteNumber}, Display: ${displayText}`);
+
+    return (
+      <span
+        data-footnote="true"
+        style={{
+          display: 'inline-block',
+          cursor: 'pointer',
+          fontSize: '0.65rem',
+          padding: '2px 6px',
+          margin: '0 2px',
+          borderRadius: '12px',
+          verticalAlign: 'middle',
+          backgroundColor: isHovered ? '#9e9e9e' : '#bdbdbd',
+          color: 'inherit',
+          userSelect: 'none',
+          transition: 'background-color 0.2s',
+        }}
+        onMouseEnter={() => {
+          console.log(`[FootnoteChip] Mouse ENTER - Event: ${eventId}, Footnote: ${footnoteNumber}`);
+          setIsHovered(true);
+        }}
+        onMouseLeave={() => {
+          console.log(`[FootnoteChip] Mouse LEAVE - Event: ${eventId}, Footnote: ${footnoteNumber}`);
+          setIsHovered(false);
+        }}
+        onMouseDown={(e) => {
+          console.log(`[FootnoteChip] Mouse DOWN - Event: ${eventId}, Footnote: ${footnoteNumber}`);
+          e.stopPropagation();
+          e.preventDefault();
+        }}
+        onClick={(e) => {
+          console.log(`[FootnoteChip] CLICK - Event: ${eventId}, Footnote: ${footnoteNumber}`);
+          e.stopPropagation();
+          e.preventDefault();
+          onClick();
+        }}
+      >
+        [{displayText}]
+      </span>
+    );
+  };
+
+  // Helper function to parse HTML tags and convert to React nodes
+  const parseHtmlToReact = (text: string, keyPrefix: string = ''): React.ReactNode[] => {
+    const nodes: React.ReactNode[] = [];
+    // Use [\s\S] instead of . to match across newlines
+    const regex = /<strong>([\s\S]*?)<\/strong>/g;
+    let lastIndex = 0;
+    let match;
+    let partIndex = 0;
+
+    while ((match = regex.exec(text)) !== null) {
+      // Add text before the <strong> tag
+      if (match.index > lastIndex) {
+        const textBefore = text.substring(lastIndex, match.index);
+        nodes.push(
+          <React.Fragment key={`${keyPrefix}-text-${partIndex}`}>
+            {textBefore}
+          </React.Fragment>
+        );
+      }
+
+      // Add the <strong> content
+      nodes.push(
+        <strong key={`${keyPrefix}-strong-${partIndex}`}>
+          {match[1]}
+        </strong>
+      );
+
+      partIndex++;
+      lastIndex = regex.lastIndex;
+    }
+
+    // Add remaining text
+    if (lastIndex < text.length) {
+      const textAfter = text.substring(lastIndex);
+      nodes.push(
+        <React.Fragment key={`${keyPrefix}-text-end`}>
+          {textAfter}
+        </React.Fragment>
+      );
+    }
+
+    return nodes.length > 0 ? nodes : [<React.Fragment key={`${keyPrefix}-all`}>{text}</React.Fragment>];
+  };
+
   const renderDescriptionWithFootnotes = (
     description: string,
     event: Event
   ): React.ReactNode => {
+    console.log(`[renderDescriptionWithFootnotes] Event: ${event._id}, Has footnotes: ${!!event.footnotes}, Footnote count: ${event.footnotes?.length || 0}`);
+
     if (!event.footnotes || event.footnotes.length === 0) {
-      return description;
+      // No footnotes, but still parse HTML
+      return <>{parseHtmlToReact(description, `desc-${event._id}`)}</>;
     }
 
     // Parse description for [N] patterns
@@ -678,18 +831,31 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
     while ((match = regex.exec(description)) !== null) {
       const footnoteNumber = parseInt(match[1], 10);
       const footnote = event.footnotes.find(f => f.number === footnoteNumber);
+      console.log(`[renderDescriptionWithFootnotes] Found [${footnoteNumber}] in description, footnote exists: ${!!footnote}`);
 
-      // Add text before the footnote
+      // Add text before the footnote (parse HTML)
       if (match.index > lastIndex) {
-        parts.push(description.substring(lastIndex, match.index));
+        const textBefore = description.substring(lastIndex, match.index);
+        parts.push(...parseHtmlToReact(textBefore, `${event._id}-${match.index}`));
       }
 
       if (footnote) {
         // Convert IDs to strings for comparison
         const referenceId = String(footnote.referenceId);
+        console.log(`[renderDescriptionWithFootnotes] Looking for reference [${footnoteNumber}], type: ${footnote.type}, referenceId: ${referenceId}`);
+        console.log(`[renderDescriptionWithFootnotes] eventLinks[${event._id}]:`, eventLinks[event._id]?.length || 0, 'links');
+        console.log(`[renderDescriptionWithFootnotes] eventAttachments[${event._id}]:`, eventAttachments[event._id]?.length || 0, 'attachments');
+
+        // Log the actual link IDs to see the mismatch
+        if (footnote.type === 'link' && eventLinks[event._id]) {
+          console.log(`[renderDescriptionWithFootnotes] Available link IDs:`, eventLinks[event._id].map(l => String(l._id)).join(', '));
+        }
+
         const reference = footnote.type === 'link'
           ? eventLinks[event._id]?.find(l => String(l._id) === referenceId)
           : eventAttachments[event._id]?.find(a => String(a._id) === referenceId);
+
+        console.log(`[renderDescriptionWithFootnotes] Reference found: ${!!reference}`);
 
         if (reference) {
           const sourceText = footnote.customSource || (
@@ -709,50 +875,47 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
           const detailParts = [sourceText, dateText, pageRangeText].filter(Boolean);
           const displayText = detailParts.join(', ');
 
+          console.log(`[renderDescriptionWithFootnotes] Creating FootnoteChip for [${footnoteNumber}], displayText: ${displayText}`);
+
           parts.push(
-            <Chip
+            <FootnoteChip
               key={`footnote-${event._id}-${footnoteNumber}-${match.index}`}
-              label={`[${displayText}]`}
-              size="small"
-              onClick={(e) => {
-                e.stopPropagation();
+              displayText={displayText}
+              onClick={() => {
+                console.log(`[FootnoteChip onClick callback] Event: ${event._id}, Footnote: ${footnoteNumber}, Type: ${footnote.type}`);
                 if (footnote.type === 'link') {
                   const link = reference as Link;
+                  console.log(`[FootnoteChip onClick callback] Opening link: ${link.url}`);
                   window.open(link.url, '_blank', 'noopener,noreferrer');
                 } else {
+                  console.log(`[FootnoteChip onClick callback] Opening attachment`);
                   handleAttachmentClick(reference as Attachment);
                 }
               }}
-              sx={{
-                cursor: 'pointer',
-                fontSize: '0.65rem',
-                height: 'auto',
-                mx: 0.25,
-                verticalAlign: 'middle',
-                '&:hover': {
-                  backgroundColor: 'primary.light',
-                },
-              }}
+              eventId={event._id}
+              footnoteNumber={footnoteNumber}
+              matchIndex={match.index}
             />
           );
         } else {
           // Footnote reference not found - show placeholder with source info if available
+          console.log(`[renderDescriptionWithFootnotes] Reference NOT found for [${footnoteNumber}], using fallback`);
           const fallbackText = footnote.customSource || (footnote.type === 'attachment' ? 'attachment' : 'link');
           const fallbackParts = [fallbackText, footnote.date, footnote.pageRange].filter(Boolean);
           const fallbackDisplay = fallbackParts.length > 0 ? fallbackParts.join(', ') : String(footnoteNumber);
+          console.log(`[renderDescriptionWithFootnotes] Fallback display text: ${fallbackDisplay}`);
 
           parts.push(
-            <Chip
-              key={`footnote-${event._id}-${footnoteNumber}-${match.index}`}
-              label={`[${fallbackDisplay}]`}
-              size="small"
-              sx={{
-                fontSize: '0.65rem',
-                height: 'auto',
-                mx: 0.25,
-                verticalAlign: 'middle',
-                backgroundColor: 'warning.light',
+            <FootnoteChip
+              key={`footnote-fallback-${event._id}-${footnoteNumber}-${match.index}`}
+              displayText={fallbackDisplay}
+              onClick={() => {
+                console.log(`[FootnoteChip fallback] Clicked but no link available for [${footnoteNumber}]`);
+                // No link available - this is a fallback footnote
               }}
+              eventId={event._id}
+              footnoteNumber={footnoteNumber}
+              matchIndex={match.index}
             />
           );
         }
@@ -764,9 +927,10 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
       lastIndex = regex.lastIndex;
     }
 
-    // Add remaining text after last footnote
+    // Add remaining text after last footnote (parse HTML)
     if (lastIndex < description.length) {
-      parts.push(description.substring(lastIndex));
+      const textAfter = description.substring(lastIndex);
+      parts.push(...parseHtmlToReact(textAfter, `${event._id}-end`));
     }
 
     return <>{parts}</>;
@@ -2607,7 +2771,22 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
                         display: 'flex',
                         flexDirection: 'column',
                       }}
-                      onClick={(e) => handleEventClick(event._id, e.shiftKey)}
+                      onClick={(e) => {
+                        console.log(`[Card] CLICK - Event: ${event._id}`);
+                        // Check if click target is a footnote or contained within a footnote
+                        let target = e.target as HTMLElement;
+                        console.log(`[Card] Click target:`, target, `tagName: ${target.tagName}`);
+                        while (target && target !== e.currentTarget) {
+                          console.log(`[Card] Checking element:`, target, `has data-footnote: ${target.hasAttribute?.('data-footnote')}`);
+                          if (target.hasAttribute?.('data-footnote')) {
+                            console.log(`[Card] Found footnote attribute, returning early`);
+                            return; // Don't handle event click if clicking on a footnote
+                          }
+                          target = target.parentElement as HTMLElement;
+                        }
+                        console.log(`[Card] No footnote found, calling handleEventClick`);
+                        handleEventClick(event._id, e.shiftKey);
+                      }}
                     >
                       <CardContent sx={{
                         py: 1.5,
@@ -2773,23 +2952,26 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
                           <>
                             {event.description && (
                               <Box>
-                                <Typography
-                                  ref={(el) => descriptionRefs.current[event._id] = el}
+                                <Box
+                                  ref={(el) => descriptionRefs.current[event._id] = el as any}
                                   component="div"
-                                  variant="body2"
-                                  color="text.secondary"
                                   sx={{
                                     mb: 0.5,
                                     fontSize: '0.8rem',
+                                    color: 'text.secondary',
                                     display: '-webkit-box',
                                     WebkitLineClamp: 3,
                                     WebkitBoxOrient: 'vertical',
                                     overflow: 'hidden',
                                     textOverflow: 'ellipsis',
+                                    whiteSpace: 'pre-wrap',
+                                    '& > span': {
+                                      pointerEvents: 'auto',
+                                    },
                                   }}
                                 >
                                   {renderDescriptionWithFootnotes(event.description, event)}
-                                </Typography>
+                                </Box>
                                 {descriptionOverflows[event._id] && (
                                   <Button
                                     size="small"
@@ -3174,7 +3356,17 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
               <Typography variant="subtitle2" sx={{ fontWeight: 'bold', mb: 1 }}>
                 Description
               </Typography>
-              <Typography component="div" variant="body2" color="text.secondary" sx={{ whiteSpace: 'pre-wrap' }}>
+              <Typography
+                component="div"
+                variant="body2"
+                color="text.secondary"
+                sx={{
+                  whiteSpace: 'pre-wrap',
+                  '& > span': {
+                    pointerEvents: 'auto',
+                  },
+                }}
+              >
                 {renderDescriptionWithFootnotes(selectedEventDetail.description, selectedEventDetail)}
               </Typography>
             </Box>

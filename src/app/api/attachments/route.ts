@@ -19,9 +19,11 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const eventId = searchParams.get('eventId');
     const entityId = searchParams.get('entityId');
+    const timelineId = searchParams.get('timelineId');
+    const type = searchParams.get('type'); // 'events' or 'entities'
 
-    if (!eventId && !entityId) {
-      return NextResponse.json({ error: 'Event ID or Entity ID is required' }, { status: 400 });
+    if (!eventId && !entityId && !timelineId) {
+      return NextResponse.json({ error: 'Event ID, Entity ID, or Timeline ID is required' }, { status: 400 });
     }
 
     await dbConnect();
@@ -67,7 +69,7 @@ export async function GET(request: NextRequest) {
       }));
 
       return NextResponse.json(attachments);
-    } else {
+    } else if (entityId) {
       const entity = await Entity.findOne({
         _id: entityId,
         createdBy: session.user.id,
@@ -102,6 +104,105 @@ export async function GET(request: NextRequest) {
       }));
 
       return NextResponse.json(attachments);
+    } else if (timelineId) {
+      // Fetch by type (events or entities)
+      if (type === 'entities') {
+        // Fetch all entities in the timeline
+        const entities = await Entity.find({
+          timelineId,
+          createdBy: session.user.id,
+        });
+
+        if (entities.length === 0) {
+          return NextResponse.json({});
+        }
+
+        const entityIds = entities.map(e => e._id);
+
+        // Find all attachments for these entities
+        const attachmentLinks = await AttachmentLink.find({
+          entityId: { $in: entityIds }
+        })
+          .populate({
+            path: 'attachmentId',
+            model: Attachment
+          })
+          .sort({ createdAt: -1 });
+
+        // Group by entityId
+        const attachmentsByEntity: Record<string, any[]> = {};
+        attachmentLinks.forEach(link => {
+          const entId = String(link.entityId);
+          if (!attachmentsByEntity[entId]) {
+            attachmentsByEntity[entId] = [];
+          }
+          attachmentsByEntity[entId].push({
+            _id: link.attachmentId._id,
+            filename: link.attachmentId.filename,
+            originalName: link.attachmentId.originalName,
+            mimeType: link.attachmentId.mimeType,
+            size: link.attachmentId.size,
+            url: link.attachmentId.url,
+            type: link.attachmentId.type,
+            caption: link.attachmentId.caption,
+            altText: link.attachmentId.altText,
+            creator: link.attachmentId.creator,
+            creditLine: link.attachmentId.creditLine,
+            copyright: link.attachmentId.copyright,
+            date: link.attachmentId.date,
+          });
+        });
+
+        return NextResponse.json(attachmentsByEntity);
+      } else {
+        // Default to events if type not specified or type === 'events'
+        const events = await Event.find({
+          timelineId,
+          createdBy: session.user.id,
+        });
+
+        if (events.length === 0) {
+          return NextResponse.json({});
+        }
+
+        const eventIds = events.map(e => e._id);
+
+        // Find all attachments for these events
+        const attachmentLinks = await AttachmentLink.find({
+          eventId: { $in: eventIds }
+        })
+          .populate({
+            path: 'attachmentId',
+            model: Attachment
+          })
+          .sort({ createdAt: -1 });
+
+        // Group by eventId
+        const attachmentsByEvent: Record<string, any[]> = {};
+        attachmentLinks.forEach(link => {
+          const evtId = String(link.eventId);
+          if (!attachmentsByEvent[evtId]) {
+            attachmentsByEvent[evtId] = [];
+          }
+          attachmentsByEvent[evtId].push({
+            _id: link.attachmentId._id,
+            filename: link.attachmentId.filename,
+            originalName: link.attachmentId.originalName,
+            mimeType: link.attachmentId.mimeType,
+            size: link.attachmentId.size,
+            url: link.attachmentId.url,
+            type: link.attachmentId.type,
+            caption: link.attachmentId.caption,
+            altText: link.attachmentId.altText,
+            creator: link.attachmentId.creator,
+            creditLine: link.attachmentId.creditLine,
+            copyright: link.attachmentId.copyright,
+            date: link.attachmentId.date,
+          });
+        });
+
+        return NextResponse.json(attachmentsByEvent);
+      }
     }
   } catch (error) {
     console.error('Error fetching attachments:', error);

@@ -334,9 +334,9 @@ export default function TimelineInterface({ userId }: TimelineInterfaceProps) {
     }
   };
 
-  const handleMapReady = () => {
+  const handleMapReady = useCallback(() => {
     setMapReady(true);
-  };
+  }, []);
 
   // Update panel components with current state
   const updatedPanels = useMemo(() => panels.map(panel => {
@@ -382,6 +382,7 @@ export default function TimelineInterface({ userId }: TimelineInterfaceProps) {
             onAddEntity={handleAddEntity}
             refreshTrigger={refreshTrigger}
             onEntitiesFiltered={handleEntitiesFiltered}
+            visibleEventIds={visibleEventIds}
           />
         );
         break;
