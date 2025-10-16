@@ -88,6 +88,8 @@ export default function ConnectionManagerModal({
   const [endArrow, setEndArrow] = useState<'none' | 'arrow'>('none');
   const [hoveredConnectionId, setHoveredConnectionId] = useState<string | null>(null);
   const [editingConnectionId, setEditingConnectionId] = useState<string | null>(null);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   // Reset form when dialog opens/closes
   useEffect(() => {
@@ -360,6 +362,56 @@ export default function ConnectionManagerModal({
       alert('Failed to create connection');
     } finally {
       setCreating(false);
+    }
+  };
+
+  // Delete connection handler
+  const handleDeleteConnection = async () => {
+    if (!editingConnectionId) return;
+
+    setDeleting(true);
+    try {
+      const response = await fetch(`/api/connections/${editingConnectionId}`, {
+        method: 'DELETE',
+      });
+
+      if (response.ok) {
+        // Refresh connections
+        const selectedItem = sourceItem || targetItem;
+        if (selectedItem && timelineId) {
+          const connectionsResponse = await fetch(`/api/connections?timelineId=${timelineId}`);
+          if (connectionsResponse.ok) {
+            const allConnections = await connectionsResponse.json();
+            const relevantConnections = allConnections.filter((conn: Connection) => {
+              if (!conn.sourceId || !conn.targetId) return false;
+              const connSourceId = typeof conn.sourceId === 'object' ? conn.sourceId._id : conn.sourceId;
+              const connTargetId = typeof conn.targetId === 'object' ? conn.targetId._id : conn.targetId;
+              return connSourceId === selectedItem._id || connTargetId === selectedItem._id;
+            });
+            setConnections(relevantConnections);
+          }
+        }
+
+        // Clear form and close dialog
+        setSourceItem(null);
+        setTargetItem(null);
+        setRelationship('');
+        setTags([]);
+        setDescription('');
+        setStartArrow('none');
+        setEndArrow('none');
+        setEditingConnectionId(null);
+        setDeleteConfirmOpen(false);
+      } else {
+        const errorData = await response.json();
+        console.error('Failed to delete connection:', errorData);
+        alert(`Failed to delete connection: ${errorData.error || 'Unknown error'}`);
+      }
+    } catch (error) {
+      console.error('Error deleting connection:', error);
+      alert('Failed to delete connection');
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -1238,18 +1290,69 @@ export default function ConnectionManagerModal({
         </Box>
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose} disabled={creating}>
-          Cancel
-        </Button>
-        <Button
-          variant="contained"
-          onClick={handleCreateConnection}
-          disabled={!sourceItem || !targetItem || !relationship || creating || (!editingConnectionId && hasExistingConnection())}
-          startIcon={creating ? <CircularProgress size={16} /> : undefined}
-        >
-          {creating ? (editingConnectionId ? 'Updating...' : 'Creating...') : (editingConnectionId ? 'Update Connection' : 'Create Connection')}
-        </Button>
+        <Box sx={{ display: 'flex', width: '100%', justifyContent: 'space-between', alignItems: 'center' }}>
+          <Button
+            color="error"
+            onClick={() => setDeleteConfirmOpen(true)}
+            disabled={!editingConnectionId || deleting || creating}
+          >
+            Delete
+          </Button>
+          <Box sx={{ display: 'flex', gap: 1 }}>
+            <Button onClick={onClose} disabled={creating || deleting}>
+              Cancel
+            </Button>
+            <Button
+              variant="contained"
+              onClick={handleCreateConnection}
+              disabled={!sourceItem || !targetItem || !relationship || creating || deleting || (!editingConnectionId && hasExistingConnection())}
+              startIcon={creating ? <CircularProgress size={16} /> : undefined}
+            >
+              {creating ? (editingConnectionId ? 'Updating...' : 'Creating...') : (editingConnectionId ? 'Update Connection' : 'Create Connection')}
+            </Button>
+          </Box>
+        </Box>
       </DialogActions>
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog
+        open={deleteConfirmOpen}
+        onClose={() => setDeleteConfirmOpen(false)}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>
+          Confirm Delete Connection
+        </DialogTitle>
+        <DialogContent>
+          <Typography>
+            Are you sure you want to delete this connection?
+            {sourceItem && targetItem && (
+              <>
+                <br /><br />
+                <strong>{getItemName(sourceItem)}</strong> {relationship} <strong>{getItemName(targetItem)}</strong>
+              </>
+            )}
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={() => setDeleteConfirmOpen(false)}
+            disabled={deleting}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="contained"
+            color="error"
+            onClick={handleDeleteConnection}
+            disabled={deleting}
+            startIcon={deleting ? <CircularProgress size={16} /> : undefined}
+          >
+            {deleting ? 'Deleting...' : 'Delete Connection'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Dialog>
   );
 }

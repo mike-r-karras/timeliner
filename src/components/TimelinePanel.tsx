@@ -424,10 +424,11 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
       eventCount: events.length,
       isClient,
       heightReady,
+      mapReady,
       scrollRestored
     });
 
-    if (!onVisibleEventsChange || events.length === 0 || !isClient || !heightReady) {
+    if (!onVisibleEventsChange || events.length === 0 || !isClient || !heightReady || !mapReady) {
       console.log('[IntersectionObserver] Skipping setup - missing requirements');
       return;
     }
@@ -525,7 +526,7 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
         delete (timelineScrollRef.current as any).__observer;
       }
     };
-  }, [events, onVisibleEventsChange, isClient, heightReady]); // Re-run when events, callback, or DOM readiness changes
+  }, [events, onVisibleEventsChange, isClient, heightReady, mapReady]); // Re-run when events, callback, or DOM readiness changes
 
   // Maintain center focus when zoom level changes (but not during initial restoration)
   useEffect(() => {
@@ -2024,15 +2025,6 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
     );
   }
 
-  // Don't render timeline content until map is ready
-  if (!mapReady) {
-    return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
-        <CircularProgress />
-      </Box>
-    );
-  }
-
   return (
     <Box
       ref={containerRef}
@@ -2040,10 +2032,29 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
         height: '100%',
         display: 'flex',
         flexDirection: 'column',
-        overflow: 'hidden' // Prevent outer scroll, force inner scroll
+        overflow: 'hidden', // Prevent outer scroll, force inner scroll
+        position: 'relative' // For absolute positioned loading overlay
       }}
       suppressHydrationWarning
     >
+      {/* Loading overlay when map is not ready */}
+      {!mapReady && (
+        <Box sx={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          backgroundColor: 'rgba(255, 255, 255, 0.9)',
+          zIndex: 9999
+        }}>
+          <CircularProgress />
+        </Box>
+      )}
+
       {/* Timeline Header */}
       <Box ref={headerRef} sx={{ borderBottom: 1, borderColor: 'divider' }}>
         {/* Title Bar */}

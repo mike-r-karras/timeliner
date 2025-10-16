@@ -2,6 +2,8 @@
 
 A comprehensive NextJS application for creating and managing annotated timelines with events, entities, and locations. Features multi-user support, admin management, and interactive panels for timeline visualization.
 
+![Sample Timeline](https://github.com/mike-r-karras/timeliner/blob/develop/timeline.png?raw=true)
+
 ## Features
 
 ### Core Functionality

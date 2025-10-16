@@ -140,13 +140,22 @@ export default function TimelineInterface({ userId }: TimelineInterfaceProps) {
           // Extract entity IDs from connections
           const entityIds = new Set<string>();
           connections.forEach((conn: any) => {
+            // Skip if sourceId or targetId is null (deleted item)
+            if (!conn.sourceId || !conn.targetId) return;
+
+            const sourceIdStr = typeof conn.sourceId === 'object' ? conn.sourceId._id : conn.sourceId;
+            const targetIdStr = typeof conn.targetId === 'object' ? conn.targetId._id : conn.targetId;
+
+            // Skip if we couldn't extract IDs
+            if (!sourceIdStr || !targetIdStr) return;
+
             // If source is an event and target is an entity, add target
-            if (conn.sourceModel === 'Event' && conn.targetModel === 'Entity' && visibleEventIds.includes(conn.sourceId._id || conn.sourceId)) {
-              entityIds.add(conn.targetId._id || conn.targetId);
+            if (conn.sourceModel === 'Event' && conn.targetModel === 'Entity' && visibleEventIds.includes(sourceIdStr)) {
+              entityIds.add(targetIdStr);
             }
             // If target is an event and source is an entity, add source
-            if (conn.targetModel === 'Event' && conn.sourceModel === 'Entity' && visibleEventIds.includes(conn.targetId._id || conn.targetId)) {
-              entityIds.add(conn.sourceId._id || conn.sourceId);
+            if (conn.targetModel === 'Event' && conn.sourceModel === 'Entity' && visibleEventIds.includes(targetIdStr)) {
+              entityIds.add(sourceIdStr);
             }
           });
 
