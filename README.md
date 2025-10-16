@@ -4,7 +4,7 @@ A comprehensive NextJS application for creating and managing annotated timelines
 
 ![Sample Timeline](https://github.com/mike-r-karras/timeliner/blob/develop/timeline.png?raw=true)
 
-![Connection Manager](https://github.com/mike-r-karras/timeliner/blob/develop/connection_manager?raw=true)
+![Connection Manager](https://github.com/mike-r-karras/timeliner/blob/develop/connection_manager.png?raw=true)
 
 ## Features
 
