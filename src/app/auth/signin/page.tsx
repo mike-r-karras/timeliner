@@ -145,14 +145,6 @@ export default function SignInPage() {
                   {loading ? 'Signing in...' : 'Sign In'}
                 </Button>
               </Box>
-
-              <Box sx={{ mt: 2, p: 2, bgcolor: 'grey.50', borderRadius: 1 }}>
-                <Typography variant="body2" color="text.secondary">
-                  <strong>Default Admin:</strong><br />
-                  Username: root<br />
-                  Password: toor
-                </Typography>
-              </Box>
             </CardContent>
           </Card>
         </Box>
