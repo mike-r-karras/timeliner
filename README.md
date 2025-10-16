@@ -51,23 +51,18 @@ npm install
 ```
 
 ### 2. Database Setup
-Create a MongoDB database named `timeliner` with user credentials:
-- Database: `timeliner`
-- Username: `timeliner`
-- Password: `renilemit`
-
-Or update the connection string in `.env.local` to match your setup.
+Create a MongoDB database named `timeliner` with user credentials in `.env.local` to match your setup.
 
 ### 3. Environment Configuration
 The `.env.local` file is already configured with:
 ```env
-MONGODB_URI=mongodb://timeliner:renilemit@localhost:27017/timeliner
+MONGODB_URI=your-mongodb-connection-string
 NEXTAUTH_SECRET=your-secret-key-change-in-production
 NEXTAUTH_URL=http://localhost:3000
 JWT_SECRET=your-jwt-secret-change-in-production
 ```
 
-**Important**: Change the secret keys before deploying to production.
+**Important**: Change the connection string and secret keys before deploying to production.
 
 ### 4. Run the Application
 ```bash
@@ -82,6 +77,8 @@ The application will be available at `http://localhost:3000`
 - **Password**: `toor`
 
 This account is automatically created when the application starts. Use it to access the admin panel and create additional users.
+
+**Important**: Change this in your local application once started.
 
 ## Usage Guide
 
