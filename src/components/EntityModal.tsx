@@ -167,6 +167,7 @@ export default function EntityModal({
 
       if (entityResponse.ok) {
         const entity = await entityResponse.json();
+        console.log('/**********\nFetched entity:', entity, '\n**********/');
         setFormData({
           name: entity.name,
           type: entity.type,

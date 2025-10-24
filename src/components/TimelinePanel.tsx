@@ -85,6 +85,7 @@ interface Link {
 
 interface TimelinePanelProps {
   timelineId?: string | null;
+  shareId?: string;
   selectedItems?: any;
   onSelection?: (type: 'event' | 'entity' | 'location', ids: string[], append?: boolean) => void;
   onEditEvent?: (eventId: string) => void;
@@ -93,9 +94,10 @@ interface TimelinePanelProps {
   onRefresh?: () => void;
   onVisibleEventsChange?: (visibleEventIds: string[]) => void;
   mapReady?: boolean;
+  readOnly?: boolean;
 }
 
-export default function TimelinePanel({ timelineId, selectedItems, onSelection, onEditEvent, onAddEvent, refreshTrigger, onRefresh, onVisibleEventsChange, mapReady }: TimelinePanelProps) {
+export default function TimelinePanel({ timelineId, shareId, selectedItems, onSelection, onEditEvent, onAddEvent, refreshTrigger, onRefresh, onVisibleEventsChange, mapReady, readOnly = false }: TimelinePanelProps) {
   const [loading, setLoading] = useState(false);
   const [events, setEvents] = useState<Event[]>([]);
   const [chains, setChains] = useState<Chain[]>([]);
@@ -577,9 +579,16 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
   const fetchTimelineData = async () => {
     setLoading(true);
     try {
+      const timelineUrl = shareId
+        ? `/api/share/${shareId}/timeline`
+        : `/api/timelines/${timelineId}`;
+      const eventsUrl = shareId
+        ? `/api/share/${shareId}/events`
+        : `/api/events?timelineId=${timelineId}`;
+
       const [timelineResponse, eventsResponse] = await Promise.all([
-        fetch(`/api/timelines/${timelineId}`),
-        fetch(`/api/events?timelineId=${timelineId}`)
+        fetch(timelineUrl),
+        fetch(eventsUrl)
       ]);
 
       if (timelineResponse.ok) {
@@ -598,9 +607,16 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
 
         // Fetch all attachments and links for the entire timeline at once
         try {
+          const attachmentsUrl = shareId
+            ? `/api/share/${shareId}/attachments`
+            : `/api/attachments?timelineId=${timelineId}`;
+          const linksUrl = shareId
+            ? `/api/share/${shareId}/links`
+            : `/api/links?timelineId=${timelineId}`;
+
           const [attachmentsResponse, linksResponse] = await Promise.all([
-            fetch(`/api/attachments?timelineId=${timelineId}`),
-            fetch(`/api/links?timelineId=${timelineId}`)
+            fetch(attachmentsUrl),
+            fetch(linksUrl)
           ]);
 
           if (attachmentsResponse.ok) {
@@ -2082,9 +2098,11 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
               <Typography variant="h6" sx={{ flex: 1 }}>
                 {timelineTitle}
               </Typography>
-              <IconButton size="small" onClick={() => setEditingTitle(true)}>
-                <Edit fontSize="small" />
-              </IconButton>
+              {!readOnly && (
+                <IconButton size="small" onClick={() => setEditingTitle(true)}>
+                  <Edit fontSize="small" />
+                </IconButton>
+              )}
               {onAddEvent && (
                 <IconButton
                   size="small"
@@ -2854,26 +2872,30 @@ export default function TimelinePanel({ timelineId, selectedItems, onSelection, 
                                   readOnly
                                   size="small"
                                 />
-                                <IconButton
-                                  size="small"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    onEditEvent?.(event._id);
-                                  }}
-                                  sx={{ opacity: 0.7, '&:hover': { opacity: 1 } }}
-                                >
-                                  <Edit fontSize="small" />
-                                </IconButton>
-                                <IconButton
-                                  size="small"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleDeleteEvent(event);
-                                  }}
-                                  sx={{ opacity: 0.7, '&:hover': { opacity: 1, color: 'error.main' } }}
-                                >
-                                  <Delete fontSize="small" />
-                                </IconButton>
+                                {!readOnly && (
+                                  <>
+                                    <IconButton
+                                      size="small"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        onEditEvent?.(event._id);
+                                      }}
+                                      sx={{ opacity: 0.7, '&:hover': { opacity: 1 } }}
+                                    >
+                                      <Edit fontSize="small" />
+                                    </IconButton>
+                                    <IconButton
+                                      size="small"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleDeleteEvent(event);
+                                      }}
+                                      sx={{ opacity: 0.7, '&:hover': { opacity: 1, color: 'error.main' } }}
+                                    >
+                                      <Delete fontSize="small" />
+                                    </IconButton>
+                                  </>
+                                )}
                               </Box>
                             </Box>
 

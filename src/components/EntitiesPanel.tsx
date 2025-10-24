@@ -56,6 +56,7 @@ interface Connection {
 
 interface EntitiesPanelProps {
   timelineId?: string | null;
+  shareId?: string;
   selectedItems?: SelectedItems;
   onSelection?: (type: 'event' | 'entity' | 'location', ids: string[], append?: boolean) => void;
   onEditEntity?: (entityId: string) => void;
@@ -63,6 +64,7 @@ interface EntitiesPanelProps {
   refreshTrigger?: number;
   onEntitiesFiltered?: (entityIds: string[]) => void;
   visibleEventIds?: string[];
+  readOnly?: boolean;
 }
 
 const getEntityTypeColor = (type: string) => {
@@ -82,7 +84,7 @@ const getEntityTypeColor = (type: string) => {
   }
 };
 
-export default function EntitiesPanel({ timelineId, selectedItems, onSelection, onEditEntity, onAddEntity, refreshTrigger, onEntitiesFiltered, visibleEventIds }: EntitiesPanelProps) {
+export default function EntitiesPanel({ timelineId, shareId, selectedItems, onSelection, onEditEntity, onAddEntity, refreshTrigger, onEntitiesFiltered, visibleEventIds, readOnly = false }: EntitiesPanelProps) {
   const [loading, setLoading] = useState(false);
   const [entities, setEntities] = useState<Entity[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
@@ -105,10 +107,20 @@ export default function EntitiesPanel({ timelineId, selectedItems, onSelection, 
   const fetchEntities = async () => {
     setLoading(true);
     try {
+      const entitiesUrl = shareId
+        ? `/api/share/${shareId}/entities`
+        : `/api/entities?timelineId=${timelineId}`;
+      const attachmentsUrl = shareId
+        ? `/api/share/${shareId}/attachments?type=entities`
+        : `/api/attachments?timelineId=${timelineId}&type=entities`;
+      const connectionsUrl = shareId
+        ? `/api/share/${shareId}/connections`
+        : `/api/connections?timelineId=${timelineId}`;
+
       const [entitiesResponse, attachmentsResponse, connectionsResponse] = await Promise.all([
-        fetch(`/api/entities?timelineId=${timelineId}`),
-        fetch(`/api/attachments?timelineId=${timelineId}&type=entities`),
-        fetch(`/api/connections?timelineId=${timelineId}`)
+        fetch(entitiesUrl),
+        fetch(attachmentsUrl),
+        fetch(connectionsUrl)
       ]);
 
       if (entitiesResponse.ok) {
@@ -376,19 +388,22 @@ export default function EntitiesPanel({ timelineId, selectedItems, onSelection, 
                           <Edit fontSize="small" />
                         </IconButton>
                       )}
-                      <IconButton
-                        size="small"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleDeleteEntity(entity);
-                        }}
-                        sx={{ opacity: 0.7, '&:hover': { opacity: 1, color: 'error.main' } }}
-                      >
-                        <Delete fontSize="small" />
-                      </IconButton>
+                      {!readOnly && (
+                        <IconButton
+                          size="small"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDeleteEntity(entity);
+                          }}
+                          sx={{ opacity: 0.7, '&:hover': { opacity: 1, color: 'error.main' } }}
+                        >
+                          <Delete fontSize="small" />
+                        </IconButton>
+                      )}
                     </Box>
                   </Box>
-
+                  {isEntitySelected(entity._id) && (
+                    <>
                   {entity.description && (
                     <Typography
                       variant="body2"
@@ -451,6 +466,8 @@ export default function EntitiesPanel({ timelineId, selectedItems, onSelection, 
                         </Box>
                       ))}
                     </Box>
+                  )}
+                    </>
                   )}
                 </CardContent>
               </Card>

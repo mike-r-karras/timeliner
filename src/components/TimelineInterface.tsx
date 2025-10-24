@@ -10,11 +10,15 @@ import EntitiesPanel from './EntitiesPanel';
 import EventModal from './EventModal';
 import EntityModal from './EntityModal';
 import LocationModal from './LocationModal';
+import PathModal from './PathModal';
 import ConnectionManagerModal from './ConnectionManagerModal';
 import TimelineManager from './TimelineManager';
+import path from 'path';
 
 interface TimelineInterfaceProps {
   userId: string;
+  shareId?: string;
+  readOnly?: boolean;
 }
 
 interface SelectedItems {
@@ -23,7 +27,7 @@ interface SelectedItems {
   locations: string[];
 }
 
-export default function TimelineInterface({ userId }: TimelineInterfaceProps) {
+export default function TimelineInterface({ userId, shareId, readOnly = false }: TimelineInterfaceProps) {
   const [panels, setPanels] = useState([
     {
       id: 'map',
@@ -61,6 +65,7 @@ export default function TimelineInterface({ userId }: TimelineInterfaceProps) {
   const [eventModalOpen, setEventModalOpen] = useState(false);
   const [entityModalOpen, setEntityModalOpen] = useState(false);
   const [locationModalOpen, setLocationModalOpen] = useState(false);
+  const [pathModalOpen, setPathModalOpen] = useState(false);
   const [addMenuAnchor, setAddMenuAnchor] = useState<null | HTMLElement>(null);
   const [locationModalCoords, setLocationModalCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [editingEventId, setEditingEventId] = useState<string | null>(null);
@@ -72,6 +77,7 @@ export default function TimelineInterface({ userId }: TimelineInterfaceProps) {
   const [timelineManagerOpen, setTimelineManagerOpen] = useState(false);
   const [currentTimelineTitle, setCurrentTimelineTitle] = useState<string>('');
   const [mapReady, setMapReady] = useState(false);
+  const [pathModalData, setPathModalData] = useState({});
 
   // Connection manager modal state
   const [connectionManagerOpen, setConnectionManagerOpen] = useState(false);
@@ -79,7 +85,7 @@ export default function TimelineInterface({ userId }: TimelineInterfaceProps) {
   // Initialize or load user's timeline
   useEffect(() => {
     initializeTimeline();
-  }, [userId]);
+  }, [userId, shareId]);
 
   // Save current timeline ID to localStorage when it changes
   useEffect(() => {
@@ -133,7 +139,10 @@ export default function TimelineInterface({ userId }: TimelineInterfaceProps) {
       }
 
       try {
-        const response = await fetch(`/api/connections?timelineId=${currentTimelineId}&eventIds=${visibleEventIds.join(',')}`);
+        const url = shareId
+          ? `/api/share/${shareId}/connections?eventIds=${visibleEventIds.join(',')}`
+          : `/api/connections?timelineId=${currentTimelineId}&eventIds=${visibleEventIds.join(',')}`;
+        const response = await fetch(url);
         if (response.ok) {
           const connections = await response.json();
 
@@ -171,6 +180,20 @@ export default function TimelineInterface({ userId }: TimelineInterfaceProps) {
 
   const initializeTimeline = async () => {
     try {
+      // If shareId is provided, load shared timeline
+      if (shareId) {
+        const response = await fetch(`/api/share/${shareId}/timeline`);
+        if (response.ok) {
+          const timeline = await response.json();
+          setCurrentTimelineId(timeline._id);
+          setCurrentTimelineTitle(timeline.title + ' (Shared)');
+          return;
+        } else {
+          console.error('Failed to load shared timeline');
+          return;
+        }
+      }
+
       // First check localStorage for saved timeline ID
       const savedTimelineId = localStorage.getItem('timeliner:currentTimelineId');
 
@@ -356,13 +379,15 @@ export default function TimelineInterface({ userId }: TimelineInterfaceProps) {
         component = (
           <MapPanel
             timelineId={currentTimelineId}
+            shareId={shareId}
             selectedItems={selectedItems}
             onSelection={handleSelection}
-            onAddLocation={handleMapLocationAdd}
+            onAddLocation={readOnly ? undefined : handleMapLocationAdd}
             refreshTrigger={refreshTrigger}
             filteredEntityIds={filteredEntityIds}
             visibleEventIds={visibleEventIds}
             onMapReady={handleMapReady}
+            readOnly={readOnly}
           />
         );
         break;
@@ -370,14 +395,16 @@ export default function TimelineInterface({ userId }: TimelineInterfaceProps) {
         component = (
           <TimelinePanel
             timelineId={currentTimelineId}
+            shareId={shareId}
             selectedItems={selectedItems}
             onSelection={handleSelection}
-            onEditEvent={handleEditEvent}
-            onAddEvent={handleAddEvent}
+            onEditEvent={readOnly ? undefined : handleEditEvent}
+            onAddEvent={readOnly ? undefined : handleAddEvent}
             refreshTrigger={refreshTrigger}
             onRefresh={triggerRefresh}
             onVisibleEventsChange={setVisibleEventIds}
             mapReady={mapReady}
+            readOnly={readOnly}
           />
         );
         break;
@@ -385,13 +412,15 @@ export default function TimelineInterface({ userId }: TimelineInterfaceProps) {
         component = (
           <EntitiesPanel
             timelineId={currentTimelineId}
+            shareId={shareId}
             selectedItems={selectedItems}
             onSelection={handleSelection}
-            onEditEntity={handleEditEntity}
-            onAddEntity={handleAddEntity}
+            onEditEntity={readOnly ? undefined : handleEditEntity}
+            onAddEntity={readOnly ? undefined : handleAddEntity}
             refreshTrigger={refreshTrigger}
             onEntitiesFiltered={handleEntitiesFiltered}
             visibleEventIds={visibleEventIds}
+            readOnly={readOnly}
           />
         );
         break;
@@ -406,25 +435,29 @@ export default function TimelineInterface({ userId }: TimelineInterfaceProps) {
       <AppBar position="static" sx={{ zIndex: 1200 }}>
         <Toolbar variant="dense">
           <Box sx={{ display: 'flex', alignItems: 'center', flexGrow: 1, gap: 1 }}>
-            <IconButton
-              size="small"
-              onClick={() => setTimelineManagerOpen(true)}
-              sx={{ color: 'inherit' }}
-            >
-              <MenuIcon />
-            </IconButton>
+            {!readOnly && (
+              <IconButton
+                size="small"
+                onClick={() => setTimelineManagerOpen(true)}
+                sx={{ color: 'inherit' }}
+              >
+                <MenuIcon />
+              </IconButton>
+            )}
             <Typography variant="h6">
               {currentTimelineTitle || 'Timeline'}
             </Typography>
           </Box>
-          <IconButton
-            size="small"
-            onClick={() => setConnectionManagerOpen(true)}
-            sx={{ color: 'inherit' }}
-            title="Connection Manager"
-          >
-            <AccountTree />
-          </IconButton>
+          {!readOnly && (
+            <IconButton
+              size="small"
+              onClick={() => setConnectionManagerOpen(true)}
+              sx={{ color: 'inherit' }}
+              title="Connection Manager"
+            >
+              <AccountTree />
+            </IconButton>
+          )}
         </Toolbar>
       </AppBar>
 
@@ -438,32 +471,40 @@ export default function TimelineInterface({ userId }: TimelineInterfaceProps) {
       </Box>
 
       {/* Floating Add Button */}
-      <Fab
-        color="primary"
-        sx={{ position: 'absolute', bottom: 16, right: 16, zIndex: 1000 }}
-        onClick={handleAddMenuOpen}
-      >
-        <Add />
-      </Fab>
+      {!readOnly && (
+        <>
+          <Fab
+            color="primary"
+            sx={{ position: 'absolute', bottom: 16, right: 16, zIndex: 1000 }}
+            onClick={handleAddMenuOpen}
+          >
+            <Add />
+          </Fab>
 
-      <Menu
-        anchorEl={addMenuAnchor}
-        open={Boolean(addMenuAnchor)}
-        onClose={handleAddMenuClose}
-      >
-        <MenuItem onClick={handleAddEvent}>
-          <TimelineIcon sx={{ mr: 1 }} />
-          Add Event
-        </MenuItem>
-        <MenuItem onClick={handleAddEntity}>
-          <People sx={{ mr: 1 }} />
-          Add Entity
-        </MenuItem>
-        <MenuItem onClick={handleAddLocation}>
-          <LocationOn sx={{ mr: 1 }} />
-          Add Place
-        </MenuItem>
-      </Menu>
+          <Menu
+            anchorEl={addMenuAnchor}
+            open={Boolean(addMenuAnchor)}
+            onClose={handleAddMenuClose}
+          >
+            <MenuItem onClick={handleAddEvent}>
+              <TimelineIcon sx={{ mr: 1 }} />
+              Add Event
+            </MenuItem>
+            <MenuItem onClick={handleAddEntity}>
+              <People sx={{ mr: 1 }} />
+              Add Entity
+            </MenuItem>
+            <MenuItem onClick={handleAddLocation}>
+              <LocationOn sx={{ mr: 1 }} />
+              Add Place
+            </MenuItem>
+            <MenuItem onClick={() => { setPathModalOpen(true); handleAddMenuClose(); }}>
+              <AccountTree sx={{ mr: 1 }} />
+              Add Path
+            </MenuItem>
+          </Menu>
+        </>
+      )}
 
       {/* Modals */}
       <EventModal
@@ -507,6 +548,14 @@ export default function TimelineInterface({ userId }: TimelineInterfaceProps) {
         }}
         onLocationCreated={handleLocationCreated}
         initialCoordinates={locationModalCoords}
+      />
+
+      <PathModal
+        timelineId={currentTimelineId}
+        open={pathModalOpen}
+        onClose={() => setPathModalOpen(false)} 
+        onPathCreated={triggerRefresh}
+        initialData={pathModalData}
       />
 
       {/* Connection Manager Modal */}
