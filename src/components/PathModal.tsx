@@ -25,6 +25,7 @@ import {
   debounce,
   SvgIconProps,
   Slider,
+  Tooltip
 } from '@mui/material';
 import {
   LocationOn,
@@ -47,9 +48,12 @@ import GeodesicPath from './GeodesicPath';
 import { getIconFromName } from '@/lib/pathHelper';
 import GeodesicPoint from './GeodesicPath';
 import { slerpLatLng } from '@/utils/geo';
-import useMuiDivIcon from './useMuiDivIcon';
+import { useMuiDivIcon, IconName } from '@/hooks/useMuiDivIcon';
 import { STORAGE_KEY_PANEL_POSITION_PREFIX } from 'next/dist/next-devtools/dev-overlay/shared';
 import { tempoFromDate } from '@/utils/tempo';
+import { icon } from 'leaflet';
+import path from 'path';
+import { time } from 'console';
 
 // Dynamically import MapContainer to avoid SSR issues
 const MapContainer = dynamic(() => import('react-leaflet').then((mod) => mod.MapContainer), { ssr: false });
@@ -73,8 +77,21 @@ interface PathModalProps {
   open: boolean;
   onClose: () => void;
   onSave: (data: any) => void;
+  timelineId: string;
   pathId?: string;
   initialData?: any;
+}
+
+interface IStyle {
+  color: string,
+  rot: number,
+  size: number
+}
+
+interface PathStyle {
+  color: string,
+  line: string,
+  width: number
 }
 
  export default function PathModal({ 
@@ -82,6 +99,7 @@ interface PathModalProps {
     onClose, 
     onSave, 
     pathId,
+    timelineId,
     initialData 
 }: PathModalProps) {
   const [formData, setFormData] = useState({
@@ -109,7 +127,8 @@ interface PathModalProps {
     routed: false,
     mode: 'straight',
     icon: '',
-    style: '',
+    style: { color: '', size: null, rot: null },
+    pathStyle: { color: '', line: '', width: null }
   });
 
   if (!initialData) {
@@ -148,6 +167,15 @@ interface PathModalProps {
   const [linePosition, setLinePosition] = useState(0.5);
   const [gPosition, setGPosition] = useState<number[] | null>(null);
   const [currDateTime, setCurrDateTime] = useState<Date>(new Date());
+  const [iconName, setIconName] = useState<IconName>('location_on');
+  const [iconColor, setIconColor] = useState<string>('blue');
+  const [iconSize, setIconSize] = useState<number>(32);
+  const [iconRot, setIconRot] = useState<number>(0);
+  const [pathLine, setPathLine] = useState<'solid' | 'dashed' | 'dotted'>('solid');
+  const [pathColor, setPathColor] = useState<string>('blue');
+  const [pathWidth, setPathWidth] = useState<number>(2);
+  const iconColors = ["blue", "red", "green", "orange", "purple", "yellow", "black", "gray", "pink", "brown", "teal", "cyan", "lime", "indigo", "lightBlue", "lightGreen", "white", "darkGray", "gold", "silver"]
+  const leafletIcon = useMuiDivIcon(iconName, iconColor, iconSize, [iconSize/2, iconSize * .75], iconRot);
   
   useEffect(() => {
     const sLat = Number.parseFloat(formData?.startLatitude ?? '');
@@ -284,37 +312,16 @@ useEffect(() => {
   };
 }, [endLocationQuery]);
 
-/*
-useEffect(() => {
-  const startOk = Number.isFinite(parseFloat(formData.startLatitude)) && Number.isFinite(parseFloat(formData.startLongitude));
-  const endOk   = Number.isFinite(parseFloat(formData.endLatitude))   && Number.isFinite(parseFloat(formData.endLongitude));
-  if (!startOk || !endOk) return;
-
-  const start: [number, number] = [parseFloat(formData.startLatitude), parseFloat(formData.startLongitude)];
-  const end:   [number, number] = [parseFloat(formData.endLatitude),   parseFloat(formData.endLongitude)];
-
-  setGPosition(slerpLatLng(start, end, linePosition)); // midpoint along great circle
-}, [formData.startLatitude, formData.startLongitude, formData.endLatitude, formData.endLongitude, linePosition]);
-*/
-
-const iconEl = useMemo(
-  () => getIconFromName(formData.icon, markerStyle),
-  [markerStyle]
-);
-
-
-const leafletIcon = useMuiDivIcon({ color: markerStyle?.htmlColor ?? 'blue', size: 32 });
-
-const handleSave = () => {
+const handleSave = async () => {
   if (!formData.name?.trim()) {
     setError('Path name is required.');
     return;
   }
-  if (!selectedStartLocation) {
+  if (!formData.startLatitude || !formData.startLongitude) {
     setError('Start location is required.');
     return;
   }
-  if (!selectedEndLocation) {
+  if (!formData.endLatitude || !formData.endLongitude) {
     setError('End location is required.');
     return;
   }
@@ -324,11 +331,11 @@ if (!formData.startTime || !formData.endTime || !(formData.startTime < formData.
   return;
 }
 
-
   setLoading(true);
     setError(null);
     try {
         const pathData = {
+          timelineId,
           name: formData.name.trim(),
           routed: formData.routed,
           mode: formData.mode,
@@ -341,7 +348,7 @@ if (!formData.startTime || !formData.endTime || !(formData.startTime < formData.
           startCountry: formData.startCountry.trim() || undefined,
           startLatitude: parseFloat(formData.startLatitude),
           startLongitude: parseFloat(formData.startLongitude),
-          endLocationName: formData.endLocationName,
+          endLocationName: formData.endLocationName.trim() || undefined,
           endStreetAddress: formData.endStreetAddress,
           endCity: formData.endCity,
           endStateProvince: formData.endStateProvince,
@@ -352,7 +359,21 @@ if (!formData.startTime || !formData.endTime || !(formData.startTime < formData.
           description: formData.description.trim(),
           startTime: formData.startTime,
           endTime: formData.endTime,
+          pathStyle: { pathLine: pathLine, color: pathColor, width: pathWidth },
+          style: { color: iconColor, size: iconSize, rot: iconRot },
         };
+        const url = pathId ? `/api/paths/${pathId}` : '/api/paths';
+        const method = pathId ? 'PUT' : 'POST';
+
+        const response = await fetch(url, {
+          method,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(pathData),
+        });
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.error || `HTTP ${response.status}`);
+        }
     } catch (err) {
         setError('Error preparing path data.');
         setLoading(false);
@@ -391,7 +412,7 @@ if (!formData.startTime || !formData.endTime || !(formData.startTime < formData.
           ...prev,
           icon: event.target.value as string,
     }));
-    getIconFromName(event.target.value as string);
+    setIconName(event.target.value as IconName);
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -1100,9 +1121,7 @@ const handleGetCurrentLocation = (startOrEnd: string) => {
                 onChange={(e) => setFormData({ ...formData, description: e.target.value })}
                 placeholder="Additional notes about this location..."
               />
-              <InputLabel id="travel-mode-label">Travel Mode</InputLabel>
               <Select 
-                labelId="travel-mode-label"
                 value={formData.mode} 
                 onChange={(e) => setFormData({ ...formData, mode: e.target.value })}
                 fullWidth
@@ -1119,14 +1138,72 @@ const handleGetCurrentLocation = (startOrEnd: string) => {
                 <MenuItem value="geodesic">Geodesic Line</MenuItem>
                 <MenuItem value="other">Other</MenuItem>
               </Select>
-              <InputLabel id="path-icon-label">Path Icon</InputLabel>
+
+              <Box sx={{ display: 'flex', flexDirection: 'row' }}>
+                <Box sx={{flexDirection: 'col', p: 1}}>
+                  <InputLabel id="path-line-label"  sx={{fontSize:'small',fontWeight:8}}>Path Line</InputLabel>
+                  <Select
+                    value={pathLine}
+                    onChange={(e) => setPathLine(e.target.value)}
+                    autoWidth
+                    label="Path Line"
+                    labelId='path-line-label'
+                  >
+                    <MenuItem value="solid">Solid</MenuItem>
+                    <MenuItem value="dashed">Dashed</MenuItem>
+                    <MenuItem value="dotted">Dotted</MenuItem>
+                  </Select>
+                </Box>
+                <Box sx={{flexDirection: 'col', p: 1}}>
+                  <InputLabel id="path-color-label" sx={{fontSize:'small',fontWeight:8}}>Path Color</InputLabel>
+                  <Select
+                    value={pathColor}
+                    onChange={(e) =>  setPathColor(e.target.value)}
+                    autoWidth
+                    labelId='path-color-label'
+                    label="Path Color">
+                      { iconColors.map((col) => {
+                        return (
+                          <MenuItem value={col} key={col}>
+                          <Tooltip key={col} title={col} arrow>
+                            <Box
+                              sx={{
+                                width: 10,
+                                height: 10,
+                                borderRadius: '50%',
+                                backgroundColor: col,
+                                border: '1px solid rgba(0,0,0,0.5)',
+                              }}
+                            />
+                          </Tooltip>
+                          </MenuItem>
+                        );
+                      })}
+                      </Select>
+                </Box>
+                <Box sx={{flexDirection: 'col', p: 1}}>
+                  <InputLabel id="path-width-label" sx={{fontSize:'small',fontWeight:8}}>Path Width</InputLabel>
+                  <Slider
+                    defaultValue={pathWidth}
+                    onChange={(_, value) => setPathWidth(value as number)}
+                    sx={{ width: 150 }}
+                    min={1}
+                    max={10}
+                    size="small"
+                    step = {1}
+                    valueLabelDisplay="on"
+                  />
+                </Box>
+              </Box>
+              <Box sx={{ display: 'flex', flexDirection: 'row' }}>
+                <Box sx={{flexDirection: 'col', p: 1}}>
+              <InputLabel id="path-icon-label"  sx={{fontSize:'small',fontWeight:8}}>Path Icon</InputLabel>
               <Select 
                 value={formData.icon}
                 onChange={(e) => handleIconChange(e)}
-                fullWidth
+                autoWidth 
                 label="Path Icon"
                 labelId='path-icon-label'
-                sx={{pt:2}}
               >
                 <MenuItem value="">None</MenuItem>
 <MenuItem value="car"><DirectionsCar fontSize="small" /></MenuItem>
@@ -1136,6 +1213,70 @@ const handleGetCurrentLocation = (startOrEnd: string) => {
 <MenuItem value="boat"><DirectionsBoat fontSize="small" /></MenuItem>
                 <MenuItem value="custom">Custom</MenuItem>
               </Select>
+              </Box>
+              <Box sx={{flexDirection: 'col', alignContent: 'flex-start', p: 1}}>
+                <InputLabel id="path-color-label" sx={{fontSize:'small',fontWeight:8}}>Icon Color</InputLabel>
+              <Select
+                value={iconColor}
+                onChange={(e) =>  setIconColor(e.target.value)}
+                autoWidth
+                labelId='path-color-label'
+                label="Icon Color">
+                  { iconColors.map((col) => {
+                    return (
+                      <MenuItem value={col} key={col}>
+                      <Tooltip key={col} title={col} arrow>
+                        <Box
+                          sx={{
+                            width: 10,
+                            height: 10,
+                            borderRadius: '50%',
+                            backgroundColor: col,
+                            border: '1px solid rgba(0,0,0,0.5)',
+                          }}
+                        />
+                      </Tooltip>
+                      </MenuItem>
+                    );
+                  })
+                }
+              </Select>
+              </Box>
+              <Box sx={{ flexDirection: 'col', p: 1, width: '30%', alignContent: 'flex-start' }}>
+                <InputLabel id="path-size-label" sx={{fontSize:'small', p:1}}>Icon Size</InputLabel>
+                    <Box sx={{display: 'flex', flexDirection:'row', alignItems: 'center', p:1, flex: 1 }}>
+                    <Typography variant="caption" sx={{ fontSize: '0.7rem' }}>8</Typography>
+                    <Slider
+                      defaultValue={iconSize}
+                      onChange={(_, value) => setIconSize(value as number)}
+                      sx={{ width: '40%' }}
+                      min={8}
+                      max={64}
+                      size="small"
+                      step = {1}
+                      valueLabelDisplay="on"
+                    />
+                    <Typography variant="caption" sx={{ fontSize: '0.7rem' }}>64</Typography>
+                  </Box>
+                  </Box>
+               <Box sx={{ flexDirection: 'col', p: 1, width: '30%', alignContent: 'flex-start' }}>
+                <InputLabel id="path-size-label" sx={{fontSize:'small', p:1}}>Icon Rotation</InputLabel>
+                  <Box sx={{display: 'flex', flexDirection: 'row', p: 1, alignContent: 'flex-start', justifyContent:'flex-start'}}>
+                    <Typography variant='caption' sx={{ fontSize: '0.7rem'}}>0</Typography>
+                    <Slider 
+                      defaultValue={iconRot}
+                      onChange={(_, value) => setIconRot(value)}
+                      sx = {{ width: '40%', pt: 2}}
+                      min = {0}
+                      max = {360}
+                      size = "small"
+                      step = {5}
+                      valueLabelDisplay='on'
+                    />
+                    <Typography variant='caption' sx={{ fontSize: '0.7rem'}}>360</Typography>
+                  </Box>
+                  </Box>
+                  </Box>
               <FormControlLabel
                 control={
                   <Switch
@@ -1163,7 +1304,7 @@ const handleGetCurrentLocation = (startOrEnd: string) => {
           </Typography>
           </Box>
           <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1 }}>
-            <TextField value={`: ${currDateTime}`} InputProps={{ readOnly: true }} size="small" sx={{ width: '300px' }}/>
+            <TextField value={`${currDateTime}`} InputProps={{ readOnly: true }} size="small" sx={{ width: '300px' }}/>
           </Box>
           </Box>
           <Box
@@ -1231,11 +1372,15 @@ const handleGetCurrentLocation = (startOrEnd: string) => {
     [parseFloat(formData.startLatitude), parseFloat(formData.startLongitude)],
     [parseFloat(formData.endLatitude),   parseFloat(formData.endLongitude)],
   ]}
-  options={{ weight: 2, color: 'blue' }}
+  options={{ weight: pathWidth, color: pathColor, dashArray: pathLine === 'solid' ? null : pathLine === 'dashed' ? '10,10' : '2,6' }}
 />
-              {formData.icon && gPosition && leafletIcon ? (
-  <Marker position={gPosition} icon={leafletIcon} />
-) : null}
+  {formData.icon && gPosition && leafletIcon ? (
+    <Marker
+      key={`${iconName}-${iconColor}-${iconSize}-${iconRot}`} // forces update cleanly
+      position={gPosition}
+      icon={leafletIcon}
+    />
+  ) : null}
             </MapContainer>
           </Box>
         </Box>

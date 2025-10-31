@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Timeliner - Interactive Timeline Creator",
+  title: "Lucidio - Interactive Timeline Creator",
   description: "Create and manage annotated timelines with events, entities, and locations",
   manifest: "/site.webmanifest",
   icons: {
