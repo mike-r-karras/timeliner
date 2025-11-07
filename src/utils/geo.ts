@@ -38,3 +38,32 @@ export function slerpLatLng(
   const λ = Math.atan2(y, x);
   return [toDeg(φ), toDeg(λ)];
 }
+
+export function haversineDistance(
+  coord1: [number, number],
+  coord2: [number, number]
+): number {
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const R = 6371e3; // Earth radius in meters
+
+  const φ1 = toRad(coord1[0]);
+  const φ2 = toRad(coord2[0]);
+  const Δφ = toRad(coord2[0] - coord1[0]);
+  const Δλ = toRad(coord2[1] - coord1[1]);
+
+  const a =
+    Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+    Math.cos(φ1) * Math.cos(φ2) *
+    Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+  return R * c; // in meters
+}
+
+export function totalPathDistance(coords: [number, number][]): number {
+  let total = 0;
+  for (let i = 1; i < coords.length; i++) {
+    total += haversineDistance(coords[i - 1], coords[i]);
+  }
+  return total;
+}

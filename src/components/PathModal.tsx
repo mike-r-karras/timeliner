@@ -47,11 +47,12 @@ import { DateTimePicker } from '@mui/x-date-pickers/DateTimePicker';
 import GeodesicPath from './GeodesicPath';
 import { getIconFromName } from '@/lib/pathHelper';
 import GeodesicPoint from './GeodesicPath';
-import { slerpLatLng } from '@/utils/geo';
+import { haversineDistance, openStreetRoute, slerpLatLng } from '@/utils/geo';
 import { useMuiDivIcon, IconName } from '@/hooks/useMuiDivIcon';
 import { STORAGE_KEY_PANEL_POSITION_PREFIX } from 'next/dist/next-devtools/dev-overlay/shared';
 import { tempoFromDate } from '@/utils/tempo';
 import { icon } from 'leaflet';
+import * as PL from '@mapbox/polyline';
 import path from 'path';
 import { time } from 'console';
 
@@ -60,6 +61,7 @@ const MapContainer = dynamic(() => import('react-leaflet').then((mod) => mod.Map
 const TileLayer = dynamic(() => import('react-leaflet').then((mod) => mod.TileLayer), { ssr: false });
 const Marker = dynamic(() => import('react-leaflet').then((mod) => mod.Marker), { ssr: false });
 const CircleMarker = dynamic(() => import('react-leaflet').then((mod) => mod.CircleMarker), { ssr: false });
+const Polyline = dynamic(() => import('react-leaflet').then(mod => mod.Polyline),{ ssr: false });
 
 interface PathResult {
   latitude: number;
@@ -128,7 +130,11 @@ interface PathStyle {
     mode: 'straight',
     icon: '',
     style: { color: '', size: null, rot: null },
-    pathStyle: { color: '', line: '', width: null }
+    pathStyle: { color: '', line: '', width: null },
+    duration: null,
+    coordinates: null,
+    durationSegments: null,
+    waypoints: null,
   });
 
   if (!initialData) {
@@ -165,7 +171,10 @@ interface PathStyle {
   });
   const [markerIcon, setMarkerIcon] = useState(getIconFromName('location_on', markerStyle));
   const [linePosition, setLinePosition] = useState(0.5);
+  const [routePosition, setRoutePosition] = useState<number[] | null>([]);
+  const [duration, setDuration] = useState<number>(0);
   const [gPosition, setGPosition] = useState<number[] | null>(null);
+  const [lPosition, setLPosition] = useState<number[] | null>(null);
   const [currDateTime, setCurrDateTime] = useState<Date>(new Date());
   const [iconName, setIconName] = useState<IconName>('location_on');
   const [iconColor, setIconColor] = useState<string>('blue');
@@ -174,6 +183,9 @@ interface PathStyle {
   const [pathLine, setPathLine] = useState<'solid' | 'dashed' | 'dotted'>('solid');
   const [pathColor, setPathColor] = useState<string>('blue');
   const [pathWidth, setPathWidth] = useState<number>(2);
+  const [routeCoordinates, setRouteCoordinates] = useState<[number, number][]>([]);
+  const [durationSegments, setDurationSegments] = useState<number[]>([]);
+  const [waypoints, setWaypoints] = useState<[number, number][]>([]);
   const iconColors = ["blue", "red", "green", "orange", "purple", "yellow", "black", "gray", "pink", "brown", "teal", "cyan", "lime", "indigo", "lightBlue", "lightGreen", "white", "darkGray", "gold", "silver"]
   const leafletIcon = useMuiDivIcon(iconName, iconColor, iconSize, [iconSize/2, iconSize * .75], iconRot);
   
@@ -207,6 +219,9 @@ if (
 ) {
   const p = slerpLatLng(start, end, linePosition);
   setGPosition(p);
+  const H = start[0] + (end[0] - start[0]) * linePosition;
+  const L = start[1] + (end[1] - start[1]) * linePosition;
+  setLPosition([H, L]);
 } else {
   console.warn('Invalid start/end for slerp', { start, end });
 }
@@ -312,6 +327,82 @@ useEffect(() => {
   };
 }, [endLocationQuery]);
 
+useMemo(() => {
+  if ((mode == 'straight' || mode == 'flying') && !duration) {
+    setRoutePosition([]);
+    return
+  };
+  var durPoint: [number, number];
+  var durIndex: number = 0;
+  var durPosition = Math.floor(duration * linePosition);
+  var curPosition = 0;
+  var wayPointCounter = 0;
+  while (curPosition<duration) {
+    curPosition += durationSegments[durIndex];
+    if (curPosition >= durPosition) {
+      curPosition -= durationSegments[durIndex];
+      wayPointCounter = waypoints[durIndex-1][0];
+      durIndex -= 1;
+      while(curPosition <= durPosition) {
+        curPosition += haversineDistance(routeCoordinates[wayPointCounter], routeCoordinates[wayPointCounter+1]);
+        wayPointCounter += 1;
+      }
+      setRoutePosition(routeCoordinates[wayPointCounter-1]);
+      break;
+    }
+    durIndex += 1;
+  }
+  }, [routeCoordinates, mode, duration, durationSegments, linePosition]);
+
+function normalizeToPoint(pos: any): [number, number] | null {
+  if (!pos) return null;
+
+  // Already a single [lat, lng]
+  if (Array.isArray(pos) && pos.length === 2 && typeof pos[0] === 'number') {
+    return pos as [number, number];
+  }
+
+  // Polyline array: [[lat,lng], ...] -> take first point
+  if (Array.isArray(pos) && Array.isArray(pos[0])) {
+    return pos.length > 0 ? (pos[0] as [number, number]) : null;
+  }
+
+  // {lat, lng} object
+  if (typeof pos === 'object' && 'lat' in pos && 'lng' in pos) {
+    return [pos.lat as number, pos.lng as number];
+  }
+
+  return null;
+}
+
+
+const handleRouteTypeChange = async ( value: string) => {
+    setMode(value);
+            const response = await fetch('/api/routes', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              start: [parseFloat(formData.startLongitude), parseFloat(formData.startLatitude)],
+              end: [parseFloat(formData.endLongitude), parseFloat(formData.endLatitude)],
+              routeType: value,
+        })});
+        Promise.resolve(response.json()).then((data) => { 
+          console.log('Received route data:', data);
+          console.log('Route details:', data.details);
+          console.log('Route features:', data.details.routes);
+          console.log('Route geometry:', data.details.routes[0].geometry);
+        const coords = PL.decode(data.details.routes[0].geometry);
+        setDuration(data.details.routes[0].segments[0].duration);
+        const durSegs: number[] = data.details.routes[0].segments[0].steps.map((step: any) => step.duration);
+        const wPts: number[] = data.details.routes[0].segments[0].steps.map((step: any) => step.way_points);
+        setDurationSegments(durSegs);
+        setWaypoints(wPts);
+        console.log('Decoded coordinates:', coords);
+    setRouteCoordinates(coords); }); // convert [lon, lat] to [lat, lon]
+};
+
 const handleSave = async () => {
   if (!formData.name?.trim()) {
     setError('Path name is required.');
@@ -361,6 +452,10 @@ if (!formData.startTime || !formData.endTime || !(formData.startTime < formData.
           endTime: formData.endTime,
           pathStyle: { pathLine: pathLine, color: pathColor, width: pathWidth },
           style: { color: iconColor, size: iconSize, rot: iconRot },
+          duration: duration,
+          coordinates: routeCoordinates,
+          durationSegments: durationSegments,
+          waypoints: waypoints,
         };
         const url = pathId ? `/api/paths/${pathId}` : '/api/paths';
         const method = pathId ? 'PUT' : 'POST';
@@ -1123,7 +1218,8 @@ const handleGetCurrentLocation = (startOrEnd: string) => {
               />
               <Select 
                 value={formData.mode} 
-                onChange={(e) => setFormData({ ...formData, mode: e.target.value })}
+                onChange={(e) => {setFormData({ ...formData, mode: e.target.value });
+                  handleRouteTypeChange(e.target.value);}}
                 fullWidth
                 label="Travel Mode"
               >
@@ -1184,7 +1280,7 @@ const handleGetCurrentLocation = (startOrEnd: string) => {
                 <Box sx={{flexDirection: 'col', p: 1}}>
                   <InputLabel id="path-width-label" sx={{fontSize:'small',fontWeight:8}}>Path Width</InputLabel>
                   <Slider
-                    defaultValue={pathWidth}
+                    value={pathWidth}
                     onChange={(_, value) => setPathWidth(value as number)}
                     sx={{ width: 150 }}
                     min={1}
@@ -1264,7 +1360,7 @@ const handleGetCurrentLocation = (startOrEnd: string) => {
                   <Box sx={{display: 'flex', flexDirection: 'row', p: 1, alignContent: 'flex-start', justifyContent:'flex-start'}}>
                     <Typography variant='caption' sx={{ fontSize: '0.7rem'}}>0</Typography>
                     <Slider 
-                      defaultValue={iconRot}
+                      value={iconRot}
                       onChange={(_, value) => setIconRot(value)}
                       sx = {{ width: '40%', pt: 2}}
                       min = {0}
@@ -1346,7 +1442,7 @@ const handleGetCurrentLocation = (startOrEnd: string) => {
                     center={[parseFloat(formData.startLatitude), parseFloat(formData.startLongitude)]}
                     radius={5}
                     pathOptions={{
-                      fillColor: '#0000FF', // Blue for entities
+                      fillColor: pathColor, // Blue for entities
                       fillOpacity: 0.8,
                       color: '#FFFFFF', // Yellow border when selected
                       weight: 2,
@@ -1356,7 +1452,7 @@ const handleGetCurrentLocation = (startOrEnd: string) => {
                     center={[parseFloat(formData.endLatitude), parseFloat(formData.endLongitude)]}
                     radius={5}
                     pathOptions={{
-                      fillColor: '#0000FF', // Blue for entities
+                      fillColor: pathColor, // Blue for entities
                       fillOpacity: 0.8,
                       color: '#FFFFFF', // Yellow border when selected
                       weight: 2,
@@ -1367,6 +1463,7 @@ const handleGetCurrentLocation = (startOrEnd: string) => {
                 url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                 maxZoom={19}
               />
+              { formData.mode === 'flying' && (
               <GeodesicPath
   points={[
     [parseFloat(formData.startLatitude), parseFloat(formData.startLongitude)],
@@ -1374,17 +1471,61 @@ const handleGetCurrentLocation = (startOrEnd: string) => {
   ]}
   options={{ weight: pathWidth, color: pathColor, dashArray: pathLine === 'solid' ? null : pathLine === 'dashed' ? '10,10' : '2,6' }}
 />
-  {formData.icon && gPosition && leafletIcon ? (
+      )}
+      { formData.mode == 'straight' && (
+              <Polyline
+                positions={[
+                  [parseFloat(formData.startLatitude), parseFloat(formData.startLongitude)],
+                  [parseFloat(formData.endLatitude),   parseFloat(formData.endLongitude)],
+                ]}
+                pathOptions={{ weight: pathWidth, color: pathColor, dashArray: pathLine === 'solid' ? null : pathLine === 'dashed' ? '10,10' : '2,6' }}
+              />
+      )}
+      { (formData.mode == 'driving' || formData.mode == 'walking' || formData.mode == 'bicycling' || formData.mode == 'transit') && ( 
+        <Polyline
+          key={`${formData.startLatitude}-${formData.startLongitude}-${formData.endLatitude}-${formData.endLongitude}-${formData.mode}`} // forces update when coordinates or mode change
+          positions={routeCoordinates}
+          pathOptions={{ weight: pathWidth, color: pathColor, dashArray: pathLine === 'solid' ? null : pathLine === 'dashed' ? '10,10' : '2,6' }} 
+        />
+      )}
+      {
+  (() => {
+    const point = normalizeToPoint(routePosition);
+    return (
+      point &&
+      leafletIcon &&
+      formData.mode !== 'flying' &&
+      formData.mode !== 'straight' && (
+        <Marker
+          key={`route-marker-${mode}-${iconName}-${iconColor}-${iconSize}-${iconRot}`}
+          position={point}
+          icon={leafletIcon}
+        />
+      )
+    );
+  })()
+}
+
+  {formData.icon && gPosition && leafletIcon && formData.mode == 'flying' ? (
     <Marker
       key={`${iconName}-${iconColor}-${iconSize}-${iconRot}`} // forces update cleanly
       position={gPosition}
       icon={leafletIcon}
+      rotationAngle={iconRot}
     />
-  ) : null}
-            </MapContainer>
+  ) : null }
+ { formData.icon && gPosition && leafletIcon && formData.mode == 'straight' ? (
+    <Marker
+      key={`${iconName}-${iconColor}-${iconSize}-${iconRot}`} // forces update cleanly
+      position={lPosition}
+      icon={leafletIcon}
+      rotationAngle={iconRot}
+    />
+  ) : null }
+              </MapContainer>
           </Box>
         </Box>
-    )} {/* <-- note the )} here too */}
+      )} {/* <-- note the )} here too */}
   </Box>
           </DialogContent>
   

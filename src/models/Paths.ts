@@ -31,6 +31,10 @@ export interface IPath extends Document {
   geocoded: boolean;
   geocodingSource?: string;
   style: string;
+  coordinates: [number, number][];
+  duration: number;
+  durationSegments: [number, number][];
+  waypoints: [number, number][];
   createdBy: string;
   createdAt: Date;
   updatedAt: Date;
@@ -168,6 +172,30 @@ const PathSchema = new Schema<IPath>(
       type: String,
       trim: true,
       maxlength: 100,
+    },
+    duration: {
+      type: Number,
+      required: false
+    },
+    coordinates: {
+      type: [[Number, Number]],
+      required: false
+    },
+    durationSegments: {
+      type: [[Number, Number]],
+      required: false
+    },
+    waypoints: {
+      type: [[Number, Number]],
+      required: false
+    },
+    style: {
+      type: String,
+      required: true
+      },
+    pathStyle: {
+      type: String,
+      required: false,  
     },
     createdBy: {
       type: String,
